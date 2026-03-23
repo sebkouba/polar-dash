@@ -215,6 +215,50 @@ def compute_rmssd_series(
     return rmssd_values
 
 
+def rebuild_learned_fusion_history(
+    candidate_history_by_name: dict[str, Sequence[CandidateEstimate]],
+    calibration: FusionCalibration,
+    *,
+    smoothing_alpha: float = DEFAULT_FUSION_SMOOTHING_ALPHA,
+) -> list[CandidateEstimate]:
+    grouped: dict[int, list[CandidateEstimate]] = {}
+    for candidate_name, estimates in candidate_history_by_name.items():
+        if candidate_name == "learned_fusion":
+            continue
+        for estimate in estimates:
+            grouped.setdefault(estimate.estimated_at_ns, []).append(estimate)
+
+    history: list[CandidateEstimate] = []
+    previous_rate: float | None = None
+    for estimated_at_ns in sorted(grouped):
+        weighted_terms: list[tuple[float, float]] = []
+        for candidate in grouped[estimated_at_ns]:
+            bias = calibration.bias_by_candidate.get(candidate.source, 0.0)
+            reliability = calibration.reliability_by_candidate.get(candidate.source, 1.0)
+            corrected_rate = candidate.rate_bpm - bias
+            weight = max(candidate.quality, 0.05) * reliability
+            weighted_terms.append((corrected_rate, weight))
+        if not weighted_terms:
+            continue
+        total_weight = sum(weight for _, weight in weighted_terms)
+        if total_weight <= 0:
+            continue
+        rate_bpm = sum(rate * weight for rate, weight in weighted_terms) / total_weight
+        if previous_rate is not None:
+            rate_bpm = smoothing_alpha * rate_bpm + (1.0 - smoothing_alpha) * previous_rate
+        previous_rate = rate_bpm
+        history.append(
+            CandidateEstimate(
+                estimated_at_ns=estimated_at_ns,
+                rate_bpm=float(rate_bpm),
+                quality=float(total_weight / len(weighted_terms)),
+                source="learned_fusion",
+                calibration_version=calibration.version,
+            )
+        )
+    return history
+
+
 class LiveBreathingEngine:
     def __init__(
         self,
@@ -629,3 +673,7 @@ class LiveBreathingEngine:
             self.beats[-1][0] if self.beats else 0,
         ]
         return max(latest_values)
+
+    def latest_time_ns(self) -> int | None:
+        latest = self._latest_time_ns()
+        return latest if latest > 0 else None

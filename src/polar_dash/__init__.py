@@ -15,6 +15,7 @@ from polar_dash.collector import (
     run_collection,
     scan_for_devices,
 )
+from polar_dash.cockpit import run_cockpit
 from polar_dash.evaluate import (
     evaluate_breathing_labels,
     format_evaluation_report,
@@ -165,6 +166,33 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to write point-level evaluation data as JSON.",
     )
+
+    cockpit_parser = subparsers.add_parser(
+        "cockpit",
+        help="Launch the native live breathing cockpit.",
+    )
+    cockpit_parser.add_argument(
+        "--db",
+        default="data/polar_dash.db",
+        help="SQLite file containing stored raw data and live estimates.",
+    )
+    cockpit_parser.add_argument(
+        "--prefix",
+        default="Polar H10",
+        help="Match devices whose advertised name contains this string.",
+    )
+    cockpit_parser.add_argument(
+        "--scan-timeout",
+        type=float,
+        default=10.0,
+        help="BLE scan timeout in seconds.",
+    )
+    cockpit_parser.add_argument(
+        "--reconnect-delay",
+        type=float,
+        default=3.0,
+        help="Delay before retrying after a disconnect or failed scan.",
+    )
     return parser
 
 
@@ -237,6 +265,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.json_out is not None:
                 write_evaluation_json(args.json_out, evaluations)
                 print(f"Wrote JSON report to {Path(args.json_out).expanduser().resolve()}")
+            return 0
+
+        if args.command == "cockpit":
+            run_cockpit(
+                args.db,
+                prefix=args.prefix,
+                scan_timeout=args.scan_timeout,
+                reconnect_delay=args.reconnect_delay,
+            )
             return 0
     except KeyboardInterrupt:
         print("Interrupted.")
