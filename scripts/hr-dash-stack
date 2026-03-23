@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+resolve_project_root() {
+  local path="$1"
+
+  while [ -L "$path" ]; do
+    local resolved
+    resolved="$(readlink "$path")"
+
+    if [[ "$resolved" == /* ]]; then
+      path="$resolved"
+    else
+      path="$(cd "$(dirname "$path")" && pwd)/$resolved"
+    fi
+  done
+
+  local script_dir
+  script_dir="$(cd "$(dirname "$path")" && pwd)"
+  dirname "$script_dir"
+}
+
+PROJECT_ROOT="${HR_DASH_ROOT:-$(resolve_project_root "${BASH_SOURCE[0]}")}"
+DATA_DIR="$PROJECT_ROOT/.hr_stack"
+LOG_DIR="$DATA_DIR/logs"
+PID_DIR="$DATA_DIR/pids"
+COCKPIT_PID_FILE="$PID_DIR/cockpit.pid"
+BREATHINGBAR_PID_FILE="$PID_DIR/breathingbar.pid"
+COCKPIT_LOG_FILE="$LOG_DIR/cockpit.log"
+BREATHINGBAR_LOG_FILE="$LOG_DIR/breathingbar.log"
+
+DB_PATH="${POLAR_DASH_DB_PATH:-data/polar_dash.db}"
+DEVICE_PREFIX="${POLAR_H10_PREFIX:-Polar H10}"
+
+mkdir -p "$LOG_DIR" "$PID_DIR"
+
+is_process_running() {
+  local pid="$1"
+  kill -0 "$pid" >/dev/null 2>&1
+}
+
+cleanup_stale_pid_file() {
+  local pid_file="$1"
+  local pid
+
+  if [ ! -f "$pid_file" ]; then
+    return 0
+  fi
+
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [ -n "${pid:-}" ] && ! is_process_running "$pid"; then
+    rm -f "$pid_file"
+  fi
+}
+
+start_services() {
+  if [ -f "$COCKPIT_PID_FILE" ] || [ -f "$BREATHINGBAR_PID_FILE" ]; then
+    cleanup_stale_pid_file "$COCKPIT_PID_FILE"
+    cleanup_stale_pid_file "$BREATHINGBAR_PID_FILE"
+  fi
+
+  if [ -f "$COCKPIT_PID_FILE" ] || [ -f "$BREATHINGBAR_PID_FILE" ]; then
+    echo "Services are already running. Use hroff first."
+    return 1
+  fi
+
+  (
+    cd "$PROJECT_ROOT"
+    nohup uv run polar-dash cockpit --db "$DB_PATH" --prefix "$DEVICE_PREFIX" >>"$COCKPIT_LOG_FILE" 2>&1 &
+    echo "$!" >"$COCKPIT_PID_FILE"
+
+    nohup swift run --package-path macos/BreathingBar >>"$BREATHINGBAR_LOG_FILE" 2>&1 &
+    echo "$!" >"$BREATHINGBAR_PID_FILE"
+  )
+
+  echo "Started Polar H10 stack."
+  echo "  - Cockpit: $(cat "$COCKPIT_PID_FILE")"
+  echo "  - BreathingBar: $(cat "$BREATHINGBAR_PID_FILE")"
+}
+
+stop_services() {
+  cleanup_stale_pid_file "$COCKPIT_PID_FILE"
+  cleanup_stale_pid_file "$BREATHINGBAR_PID_FILE"
+
+  if [ ! -f "$COCKPIT_PID_FILE" ] && [ ! -f "$BREATHINGBAR_PID_FILE" ]; then
+    echo "No running services found."
+    return 0
+  fi
+
+  local failed=0
+  local pid
+
+  for pid_file in "$COCKPIT_PID_FILE" "$BREATHINGBAR_PID_FILE"; do
+    if [ -f "$pid_file" ]; then
+      pid="$(cat "$pid_file")"
+      if is_process_running "$pid"; then
+        if ! kill "$pid" >/dev/null 2>&1; then
+          echo "Failed to stop pid $pid."
+          failed=1
+        fi
+      fi
+      rm -f "$pid_file"
+    fi
+  done
+
+  if [ "$failed" -eq 1 ]; then
+    echo "Some processes did not stop cleanly."
+    return 1
+  fi
+
+  echo "Stopped Polar H10 stack."
+}
+
+case "$(basename "$0")" in
+  hron)
+    start_services
+    ;;
+  hroff)
+    stop_services
+    ;;
+  *)
+    echo "Usage: hron|hroff"
+    exit 1
+    ;;
+esac
