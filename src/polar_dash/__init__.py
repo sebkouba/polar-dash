@@ -15,7 +15,7 @@ from polar_dash.collector import (
     run_collection,
     scan_for_devices,
 )
-from polar_dash.labeler import run_labeler
+from polar_dash.labeler_v2 import run_labeler
 
 
 def _build_parser() -> argparse.ArgumentParser:
