@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 ECG_SAMPLE_RATE_HZ = 130
 ACC_SAMPLE_RATE_HZ = 200
+DEFAULT_BREATHING_WINDOW_SECONDS = 20
+DEFAULT_BREATHING_STEP_SECONDS = 2
+FUSION_SMOOTHING_ALPHA = 0.75
+SINGLE_SOURCE_SMOOTHING_ALPHA = 0.60
 
 
 @dataclass(slots=True)
@@ -31,7 +35,11 @@ class BreathingCandidate:
 
 
 class RollingBreathingEstimator:
-    def __init__(self, window_seconds: int = 45, step_seconds: int = 5) -> None:
+    def __init__(
+        self,
+        window_seconds: int = DEFAULT_BREATHING_WINDOW_SECONDS,
+        step_seconds: int = DEFAULT_BREATHING_STEP_SECONDS,
+    ) -> None:
         self.window_seconds = window_seconds
         self.window_ns = window_seconds * 1_000_000_000
         self.step_ns = step_seconds * 1_000_000_000
@@ -144,7 +152,13 @@ class RollingBreathingEstimator:
         if self.previous_rate_bpm is None:
             return candidate
 
-        alpha = 0.45 if candidate.source == "fusion" else 0.30
+        # Label-backed replay showed the older 45s/5s estimator lagged behind
+        # breathing changes and stayed biased high, so use lighter smoothing.
+        alpha = (
+            FUSION_SMOOTHING_ALPHA
+            if candidate.source == "fusion"
+            else SINGLE_SOURCE_SMOOTHING_ALPHA
+        )
         smoothed_rate = alpha * candidate.rate_bpm + (1.0 - alpha) * self.previous_rate_bpm
         return BreathingCandidate(
             rate_bpm=float(smoothed_rate),
