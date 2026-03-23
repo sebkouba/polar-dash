@@ -48,8 +48,8 @@ class BreathingLabelerApp:
 
         self.root = tk.Tk()
         self.root.title("Polar Dash Breathing Labeler")
-        self.root.geometry("1040x720")
-        self.root.minsize(940, 640)
+        self.root.geometry("1180x760")
+        self.root.minsize(1080, 680)
         self.root.attributes("-topmost", True)
         self.root.configure(padx=14, pady=14)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -77,6 +77,8 @@ class BreathingLabelerApp:
         self.last_label_var = tk.StringVar(master=self.root, value="Last label: none")
         self.count_var = tk.StringVar(master=self.root, value="Labels recorded: 0")
         self.saved_session_var = tk.StringVar(master=self.root, value="Saved sessions")
+        self.session_state_var = tk.StringVar(master=self.root, value="Recorder: idle")
+        self.selection_var = tk.StringVar(master=self.root, value="Viewing: live feed")
 
         self.graph = tk.Canvas(
             self.root,
@@ -121,7 +123,17 @@ class BreathingLabelerApp:
         )
         subtitle.pack(anchor="w", pady=(4, 10))
 
-        controls = ttk.Frame(self.root)
+        body = ttk.Frame(self.root)
+        body.pack(fill="both", expand=True)
+
+        content = ttk.Frame(body)
+        content.pack(side="left", fill="both", expand=True)
+
+        sidebar = ttk.Frame(body, width=340)
+        sidebar.pack(side="left", fill="y", padx=(12, 0))
+        sidebar.pack_propagate(False)
+
+        controls = ttk.Frame(content)
         controls.pack(fill="x", pady=(0, 10))
         ttk.Label(controls, text="Session name").pack(side="left")
         name_entry = ttk.Entry(controls, textvariable=self.session_name_var, width=34)
@@ -134,7 +146,7 @@ class BreathingLabelerApp:
             side="left", padx=(8, 0)
         )
 
-        summary = ttk.Frame(self.root)
+        summary = ttk.Frame(content)
         summary.pack(fill="x", pady=(0, 10))
         ttk.Label(
             summary,
@@ -143,11 +155,11 @@ class BreathingLabelerApp:
         ).pack(anchor="w")
         ttk.Label(summary, textvariable=self.meta_var).pack(anchor="w", pady=(2, 0))
         ttk.Label(summary, textvariable=self.sensor_var).pack(anchor="w")
-        ttk.Label(summary, textvariable=self.annotation_var).pack(anchor="w")
+        ttk.Label(summary, textvariable=self.selection_var).pack(anchor="w")
 
-        self.graph.pack(fill="x", pady=(4, 12))
+        self.graph.pack(in_=content, fill="x", pady=(4, 12))
 
-        key_frame = ttk.LabelFrame(self.root, text="Keys")
+        key_frame = ttk.LabelFrame(content, text="Keys")
         key_frame.pack(fill="x", pady=(0, 12))
         for key_name, (phase_code, description, _) in KEY_BINDINGS.items():
             ttk.Label(
@@ -159,26 +171,38 @@ class BreathingLabelerApp:
             text="U: undo last label    Q or Esc: quit",
         ).pack(anchor="w", padx=8, pady=(6, 6))
 
-        feedback = ttk.Frame(self.root)
+        feedback = ttk.Frame(content)
         feedback.pack(fill="x")
         ttk.Label(feedback, textvariable=self.last_label_var).pack(anchor="w")
         ttk.Label(feedback, textvariable=self.count_var).pack(anchor="w", pady=(0, 8))
 
-        lower = ttk.Frame(self.root)
-        lower.pack(fill="both", expand=True)
-
-        recent_frame = ttk.LabelFrame(lower, text="Recent Labels")
-        recent_frame.pack(side="left", fill="both", expand=True)
+        recent_frame = ttk.LabelFrame(content, text="Recent Labels")
+        recent_frame.pack(fill="both", expand=True)
         self.recent_list.pack(in_=recent_frame, fill="both", expand=True, padx=8, pady=8)
 
-        sessions_frame = ttk.LabelFrame(lower, text="Saved Sessions")
-        sessions_frame.pack(side="left", fill="y", expand=False, padx=(12, 0))
-        sessions_frame.configure(width=340)
-        sessions_frame.pack_propagate(False)
+        session_frame = ttk.LabelFrame(sidebar, text="Session Status")
+        session_frame.pack(fill="x", pady=(0, 12))
+        ttk.Label(
+            session_frame,
+            textvariable=self.session_state_var,
+            font=("SF Pro Rounded", 15, "bold"),
+        ).pack(anchor="w", padx=8, pady=(8, 2))
+        ttk.Label(session_frame, textvariable=self.annotation_var, wraplength=300).pack(
+            anchor="w", padx=8, pady=(0, 2)
+        )
+        ttk.Label(session_frame, textvariable=self.selection_var, wraplength=300).pack(
+            anchor="w", padx=8, pady=(0, 2)
+        )
+        ttk.Label(session_frame, textvariable=self.sensor_var, wraplength=300).pack(
+            anchor="w", padx=8, pady=(0, 8)
+        )
+
+        sessions_frame = ttk.LabelFrame(sidebar, text="Saved Sessions")
+        sessions_frame.pack(fill="both", expand=True)
         ttk.Label(
             sessions_frame,
             text="Saved sessions appear here after Stop & Save. Select one to inspect it or delete it.",
-            wraplength=250,
+            wraplength=300,
         ).pack(anchor="w", padx=8, pady=(8, 6))
         sessions_list_frame = ttk.Frame(sessions_frame)
         sessions_list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -198,7 +222,7 @@ class BreathingLabelerApp:
         ttk.Label(
             sessions_frame,
             textvariable=self.saved_session_var,
-            wraplength=250,
+            wraplength=300,
         ).pack(anchor="w", padx=8, pady=(0, 8))
 
         status = ttk.Label(
@@ -223,8 +247,8 @@ class BreathingLabelerApp:
     def _post_init_focus(self) -> None:
         self.root.deiconify()
         self.root.update_idletasks()
-        width = max(self.root.winfo_width(), 1040)
-        height = max(self.root.winfo_height(), 720)
+        width = max(self.root.winfo_width(), 1180)
+        height = max(self.root.winfo_height(), 760)
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x = max((screen_width - width) // 2, 0)
@@ -448,12 +472,18 @@ class BreathingLabelerApp:
 
         if self.annotation_session_id is not None:
             self.annotation_var.set(f"Annotation session: {self.annotation_session_id} (active)")
+            self.session_state_var.set(f"Recorder: ACTIVE on session {self.annotation_session_id}")
+            self.selection_var.set("Viewing: active recording")
         elif self.last_annotation_session_id is not None:
             self.annotation_var.set(
                 f"Annotation session: inactive (last saved {self.last_annotation_session_id})"
             )
+            self.session_state_var.set("Recorder: idle")
+            self.selection_var.set(f"Viewing: saved session {self.last_annotation_session_id}")
         else:
             self.annotation_var.set("Annotation session: inactive")
+            self.session_state_var.set("Recorder: idle")
+            self.selection_var.set("Viewing: live feed")
 
     def _load_waveform(
         self,
@@ -734,6 +764,7 @@ class BreathingLabelerApp:
         if session_id is None:
             return
         self.last_annotation_session_id = session_id
+        self.selection_var.set(f"Viewing: saved session {session_id}")
         self.status_var.set(f"Viewing saved annotation session {session_id}.")
         self._refresh_view()
 
