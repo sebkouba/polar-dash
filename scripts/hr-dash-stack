@@ -50,10 +50,6 @@ mkdir -p "$LOG_DIR" "$PID_DIR"
 
 DB_PATH_ABS="$(resolve_db_path "$DB_PATH")"
 
-if [ ! -f "$DB_PATH_ABS" ]; then
-  touch "$DB_PATH_ABS"
-fi
-
 is_process_running() {
   local pid="$1"
   kill -0 "$pid" >/dev/null 2>&1
