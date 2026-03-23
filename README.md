@@ -7,6 +7,7 @@
 - Raw heart-rate service frames with RR intervals.
 - Raw ECG frames from the Polar Measurement Data service.
 - Raw accelerometer frames from the chest strap.
+- Derived breathing estimates persisted from accelerometer motion.
 - Collector session metadata and connection events.
 
 ## What The Dashboard Shows
@@ -38,10 +39,34 @@ Then open [http://127.0.0.1:8501](http://127.0.0.1:8501).
 
 The collector writes to `data/polar_dash.db` by default. You can override that with `--db`.
 
+### Tables
+
+- `sessions`: connection sessions and device metadata.
+- `hr_frames`: raw heart-rate frames plus RR intervals.
+- `ecg_frames`: raw ECG frames.
+- `acc_frames`: raw accelerometer frames.
+- `breathing_estimates`: derived breathing-rate points for lightweight clients.
+- `collector_events`: connection and streaming events.
+
 ## Useful Commands
 
 ```bash
 uv run polar-dash scan --prefix "Polar H10"
 uv run polar-dash collect --scan-timeout 10 --reconnect-delay 3
 uv run polar-dash dashboard --db data/polar_dash.db --port 8501
+uv run polar-dash backfill-breathing --db data/polar_dash.db
+swift run --package-path macos/BreathingBar
 ```
+
+## Native Menu Bar App
+
+The macOS menu bar app lives in `macos/BreathingBar`.
+
+It reads `breathing_estimates` from SQLite, shows the current breathing rate plus a tiny sparkline in the menu bar, and flashes the indicator background when the current rate is below or above the configured thresholds.
+
+Threshold defaults:
+
+- Low flash threshold: `8.0 br/min`
+- High flash threshold: `24.0 br/min`
+
+You can change both thresholds from the app’s popover window after launching it.
