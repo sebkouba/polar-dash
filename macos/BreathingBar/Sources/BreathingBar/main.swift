@@ -142,14 +142,11 @@ private final class BreathingBarModel: ObservableObject {
     }
 
     var alertColor: Color {
-        guard let currentRate else {
+        guard currentRate != nil else {
             return .clear
         }
-        if currentRate < lowerThreshold {
-            return Color.orange.opacity(flashOn ? 0.9 : 0.15)
-        }
-        if currentRate > upperThreshold {
-            return Color.red.opacity(flashOn ? 0.9 : 0.15)
+        if isAlerting && flashOn {
+            return Color.red.opacity(0.95)
         }
         return .clear
     }
@@ -252,7 +249,12 @@ private struct StatusBarView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(model.alertColor)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(model.isAlerting ? Color.red.opacity(0.9) : .clear, lineWidth: 1)
+        )
         .foregroundStyle(model.isAlerting ? Color.white : Color.primary)
+        .id(model.isAlerting ? "alert-\(model.flashOn)" : "steady")
     }
 
     private var rateText: String {
