@@ -9,7 +9,12 @@ from typing import Sequence
 
 from streamlit.web.bootstrap import run as run_streamlit
 
-from polar_dash.collector import CollectorConfig, run_collection, scan_for_devices
+from polar_dash.collector import (
+    CollectorConfig,
+    backfill_breathing_estimates,
+    run_collection,
+    scan_for_devices,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -94,6 +99,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=8501,
         help="Streamlit port.",
     )
+
+    backfill_parser = subparsers.add_parser(
+        "backfill-breathing",
+        help="Derive breathing estimates from stored accelerometer frames.",
+    )
+    backfill_parser.add_argument(
+        "--db",
+        default="data/polar_dash.db",
+        help="SQLite file containing stored raw data.",
+    )
     return parser
 
 
@@ -144,6 +159,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "browser.gatherUsageStats": False,
                 },
             )
+            return 0
+
+        if args.command == "backfill-breathing":
+            inserted = backfill_breathing_estimates(args.db)
+            print(f"Inserted {inserted} breathing estimates.")
             return 0
     except KeyboardInterrupt:
         print("Interrupted.")

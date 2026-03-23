@@ -76,6 +76,17 @@ class Storage:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS breathing_estimates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                estimated_at_ns INTEGER NOT NULL,
+                breaths_per_min REAL NOT NULL,
+                window_seconds INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT 'acc',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(session_id, estimated_at_ns, source)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_started_at
                 ON sessions(started_at_ns DESC);
             CREATE INDEX IF NOT EXISTS idx_hr_frames_session_time
@@ -86,6 +97,8 @@ class Storage:
                 ON acc_frames(session_id, sensor_recorded_at_ns);
             CREATE INDEX IF NOT EXISTS idx_collector_events_session_time
                 ON collector_events(session_id, recorded_at_ns);
+            CREATE INDEX IF NOT EXISTS idx_breathing_estimates_session_time
+                ON breathing_estimates(session_id, estimated_at_ns);
             """
         )
         self.connection.commit()
@@ -232,6 +245,36 @@ class Storage:
                 level,
                 event_type,
                 json.dumps(details),
+            ),
+        )
+        self.connection.commit()
+
+    def insert_breathing_estimate(
+        self,
+        session_id: int,
+        estimated_at_ns: int,
+        breaths_per_min: float,
+        window_seconds: int,
+        *,
+        source: str = "acc",
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT OR REPLACE INTO breathing_estimates (
+                session_id,
+                estimated_at_ns,
+                breaths_per_min,
+                window_seconds,
+                source
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                estimated_at_ns,
+                breaths_per_min,
+                window_seconds,
+                source,
             ),
         )
         self.connection.commit()
