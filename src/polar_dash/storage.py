@@ -87,6 +87,18 @@ class Storage:
                 UNIQUE(session_id, estimated_at_ns, source)
             );
 
+            CREATE TABLE IF NOT EXISTS breathing_candidate_estimates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                estimated_at_ns INTEGER NOT NULL,
+                candidate_name TEXT NOT NULL,
+                breaths_per_min REAL NOT NULL,
+                quality REAL NOT NULL,
+                calibration_version INTEGER,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(session_id, estimated_at_ns, candidate_name)
+            );
+
             CREATE TABLE IF NOT EXISTS annotation_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 started_at_ns INTEGER NOT NULL,
@@ -112,6 +124,14 @@ class Storage:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS breathing_calibrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                annotation_session_id INTEGER REFERENCES annotation_sessions(id) ON DELETE SET NULL,
+                protocol_name TEXT NOT NULL,
+                model_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_started_at
                 ON sessions(started_at_ns DESC);
             CREATE INDEX IF NOT EXISTS idx_hr_frames_session_time
@@ -124,12 +144,16 @@ class Storage:
                 ON collector_events(session_id, recorded_at_ns);
             CREATE INDEX IF NOT EXISTS idx_breathing_estimates_session_time
                 ON breathing_estimates(session_id, estimated_at_ns);
+            CREATE INDEX IF NOT EXISTS idx_breathing_candidate_estimates_session_time
+                ON breathing_candidate_estimates(session_id, estimated_at_ns);
             CREATE INDEX IF NOT EXISTS idx_annotation_sessions_started_at
                 ON annotation_sessions(started_at_ns DESC);
             CREATE INDEX IF NOT EXISTS idx_breathing_phase_labels_session_time
                 ON breathing_phase_labels(annotation_session_id, recorded_at_ns);
             CREATE INDEX IF NOT EXISTS idx_breathing_phase_labels_sensor_time
                 ON breathing_phase_labels(sensor_session_id, recorded_at_ns);
+            CREATE INDEX IF NOT EXISTS idx_breathing_calibrations_created_at
+                ON breathing_calibrations(created_at DESC);
             """
         )
         self.connection.commit()
@@ -309,6 +333,102 @@ class Storage:
             ),
         )
         self.connection.commit()
+
+    def insert_breathing_candidate_estimate(
+        self,
+        session_id: int,
+        estimated_at_ns: int,
+        candidate_name: str,
+        breaths_per_min: float,
+        quality: float,
+        *,
+        calibration_version: int | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT OR REPLACE INTO breathing_candidate_estimates (
+                session_id,
+                estimated_at_ns,
+                candidate_name,
+                breaths_per_min,
+                quality,
+                calibration_version
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                estimated_at_ns,
+                candidate_name,
+                breaths_per_min,
+                quality,
+                calibration_version,
+            ),
+        )
+        self.connection.commit()
+
+    def list_breathing_candidate_estimates(
+        self,
+        session_id: int,
+        *,
+        start_ns: int | None = None,
+        end_ns: int | None = None,
+    ) -> list[sqlite3.Row]:
+        clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+        if start_ns is not None:
+            clauses.append("estimated_at_ns >= ?")
+            params.append(start_ns)
+        if end_ns is not None:
+            clauses.append("estimated_at_ns <= ?")
+            params.append(end_ns)
+        where_clause = " AND ".join(clauses)
+        return list(
+            self.connection.execute(
+                f"""
+                SELECT *
+                FROM breathing_candidate_estimates
+                WHERE {where_clause}
+                ORDER BY estimated_at_ns ASC, candidate_name ASC
+                """,
+                params,
+            ).fetchall()
+        )
+
+    def insert_breathing_calibration(
+        self,
+        *,
+        annotation_session_id: int | None,
+        protocol_name: str,
+        model: dict[str, Any],
+    ) -> int:
+        cursor = self.connection.execute(
+            """
+            INSERT INTO breathing_calibrations (
+                annotation_session_id,
+                protocol_name,
+                model_json
+            )
+            VALUES (?, ?, ?)
+            """,
+            (
+                annotation_session_id,
+                protocol_name,
+                json.dumps(model),
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def get_latest_breathing_calibration(self) -> sqlite3.Row | None:
+        return self.connection.execute(
+            """
+            SELECT *
+            FROM breathing_calibrations
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
 
     def start_annotation_session(
         self,
