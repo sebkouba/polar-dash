@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SQLite3
 import SwiftUI
@@ -195,6 +196,12 @@ private final class BreathingBarModel: ObservableObject {
     }
 }
 
+private final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
 private struct SparklineView: View {
     let values: [Double]
     let strokeColor: Color
@@ -245,16 +252,7 @@ private struct StatusBarView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(model.alertColor)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(model.isAlerting ? Color.red.opacity(0.9) : .clear, lineWidth: 1)
-        )
-        .foregroundStyle(model.isAlerting ? Color.white : Color.primary)
-        .id(model.isAlerting ? "alert-\(model.flashOn)" : "steady")
+        .foregroundStyle(isActivelyFlashing ? Color.white : Color.primary)
     }
 
     private var rateText: String {
@@ -265,7 +263,11 @@ private struct StatusBarView: View {
     }
 
     private var sparklineColor: Color {
-        model.isAlerting ? .white : .accentColor
+        isActivelyFlashing ? .white : .accentColor
+    }
+
+    private var isActivelyFlashing: Bool {
+        model.isAlerting && model.flashOn
     }
 }
 
@@ -336,23 +338,117 @@ private struct MenuContentView: View {
     }
 }
 
+@MainActor
+private final class StatusItemController: NSObject {
+    private let model: BreathingBarModel
+    private let statusItem: NSStatusItem
+    private let popover = NSPopover()
+    private let hostingView: PassthroughHostingView<StatusBarView>
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(model: BreathingBarModel) {
+        self.model = model
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        hostingView = PassthroughHostingView(rootView: StatusBarView(model: model))
+        super.init()
+        configureStatusItem()
+        configurePopover()
+        subscribe()
+        render()
+    }
+
+    private func configureStatusItem() {
+        guard let button = statusItem.button else {
+            return
+        }
+
+        button.title = ""
+        button.image = nil
+        button.action = #selector(togglePopover(_:))
+        button.target = self
+        button.sendAction(on: [.leftMouseUp])
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 6
+        button.layer?.masksToBounds = true
+
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        hostingView.setFrameSize(hostingView.fittingSize)
+        button.addSubview(hostingView)
+
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 2),
+            hostingView.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -2),
+            hostingView.topAnchor.constraint(equalTo: button.topAnchor, constant: 1),
+            hostingView.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -1),
+        ])
+    }
+
+    private func configurePopover() {
+        popover.behavior = .transient
+        popover.contentSize = NSSize(width: 340, height: 240)
+        popover.contentViewController = NSHostingController(rootView: MenuContentView(model: model))
+    }
+
+    private func subscribe() {
+        model.objectWillChange
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.render()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func render() {
+        hostingView.rootView = StatusBarView(model: model)
+        let fitting = hostingView.fittingSize
+        statusItem.length = max(64, fitting.width + 6)
+
+        guard let button = statusItem.button else {
+            return
+        }
+
+        if model.isAlerting && model.flashOn {
+            button.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.95).cgColor
+        } else {
+            button.layer?.backgroundColor = NSColor.clear.cgColor
+        }
+        button.needsDisplay = true
+    }
+
+    @objc
+    private func togglePopover(_ sender: AnyObject?) {
+        guard let button = statusItem.button else {
+            return
+        }
+
+        if popover.isShown {
+            popover.performClose(sender)
+            return
+        }
+
+        popover.contentViewController = NSHostingController(rootView: MenuContentView(model: model))
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.becomeKey()
+    }
+}
+
 private final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusController: StatusItemController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
+        statusController = StatusItemController(model: BreathingBarModel())
     }
 }
 
 @main
 private struct BreathingBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var model = BreathingBarModel()
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuContentView(model: model)
-        } label: {
-            StatusBarView(model: model)
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
     }
 }
