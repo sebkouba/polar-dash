@@ -48,6 +48,12 @@ class RespiratoryWaveform:
     source: str
 
 
+@dataclass(slots=True)
+class WaveformView:
+    sensor_session_id: int | None
+    reference_ns: int
+
+
 class BreathingLabelerApp:
     def __init__(self, db_path: Path | str = DEFAULT_DB_PATH, name: str | None = None) -> None:
         self.storage = Storage(db_path)
@@ -86,47 +92,9 @@ class BreathingLabelerApp:
         self.saved_session_var = tk.StringVar(master=self.root, value="Saved sessions")
         self.session_state_var = tk.StringVar(master=self.root, value="Recorder: idle")
         self.selection_var = tk.StringVar(master=self.root, value="Viewing: live feed")
-
-        self.graph = tk.Canvas(
-            self.root,
-            width=800,
-            height=260,
-            bg=SURFACE_BG,
-            highlightthickness=1,
-            highlightbackground=SURFACE_BORDER,
-            highlightcolor=SURFACE_BORDER,
-            borderwidth=0,
-        )
-        self.recent_list = tk.Listbox(
-            self.root,
-            height=12,
-            activestyle="none",
-            bg=SURFACE_BG,
-            fg=TEXT_FG,
-            selectbackground=ACCENT,
-            selectforeground="#ffffff",
-            highlightthickness=1,
-            highlightbackground=SURFACE_BORDER,
-            highlightcolor=SURFACE_BORDER,
-            borderwidth=0,
-            font=("SF Pro Text", 12),
-        )
-        self.sessions_list = tk.Listbox(
-            self.root,
-            height=12,
-            width=42,
-            activestyle="none",
-            exportselection=False,
-            bg=SURFACE_BG,
-            fg=TEXT_FG,
-            selectbackground=ACCENT,
-            selectforeground="#ffffff",
-            highlightthickness=1,
-            highlightbackground=SURFACE_BORDER,
-            highlightcolor=SURFACE_BORDER,
-            borderwidth=0,
-            font=("SF Pro Text", 12),
-        )
+        self.graph: tk.Canvas
+        self.recent_list: tk.Listbox
+        self.sessions_list: tk.Listbox
 
         self._build_ui()
         self._bind_keys()
@@ -190,7 +158,17 @@ class BreathingLabelerApp:
         ttk.Label(summary, textvariable=self.sensor_var).pack(anchor="w")
         ttk.Label(summary, textvariable=self.selection_var).pack(anchor="w")
 
-        self.graph.pack(in_=content, fill="x", pady=(4, 12))
+        self.graph = tk.Canvas(
+            content,
+            width=800,
+            height=260,
+            bg=SURFACE_BG,
+            highlightthickness=1,
+            highlightbackground=SURFACE_BORDER,
+            highlightcolor=SURFACE_BORDER,
+            borderwidth=0,
+        )
+        self.graph.pack(fill="x", pady=(4, 12))
 
         key_frame = ttk.LabelFrame(content, text="Keys")
         key_frame.pack(fill="x", pady=(0, 12))
@@ -211,7 +189,21 @@ class BreathingLabelerApp:
 
         recent_frame = ttk.LabelFrame(content, text="Recent Labels")
         recent_frame.pack(fill="both", expand=True)
-        self.recent_list.pack(in_=recent_frame, fill="both", expand=True, padx=8, pady=8)
+        self.recent_list = tk.Listbox(
+            recent_frame,
+            height=12,
+            activestyle="none",
+            bg=SURFACE_BG,
+            fg=TEXT_FG,
+            selectbackground=ACCENT,
+            selectforeground="#ffffff",
+            highlightthickness=1,
+            highlightbackground=SURFACE_BORDER,
+            highlightcolor=SURFACE_BORDER,
+            borderwidth=0,
+            font=("SF Pro Text", 12),
+        )
+        self.recent_list.pack(fill="both", expand=True, padx=8, pady=8)
 
         session_frame = ttk.LabelFrame(sidebar, text="Session Status")
         session_frame.pack(fill="x", pady=(0, 12))
@@ -239,13 +231,29 @@ class BreathingLabelerApp:
         ).pack(anchor="w", padx=8, pady=(8, 6))
         sessions_list_frame = ttk.Frame(sessions_frame)
         sessions_list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.sessions_list = tk.Listbox(
+            sessions_list_frame,
+            height=12,
+            width=42,
+            activestyle="none",
+            exportselection=False,
+            bg=SURFACE_BG,
+            fg=TEXT_FG,
+            selectbackground=ACCENT,
+            selectforeground="#ffffff",
+            highlightthickness=1,
+            highlightbackground=SURFACE_BORDER,
+            highlightcolor=SURFACE_BORDER,
+            borderwidth=0,
+            font=("SF Pro Text", 12),
+        )
         sessions_scrollbar = ttk.Scrollbar(
             sessions_list_frame,
             orient="vertical",
             command=self.sessions_list.yview,
         )
         self.sessions_list.configure(yscrollcommand=sessions_scrollbar.set)
-        self.sessions_list.pack(in_=sessions_list_frame, side="left", fill="both", expand=True)
+        self.sessions_list.pack(side="left", fill="both", expand=True)
         sessions_scrollbar.pack(side="right", fill="y")
         button_row = ttk.Frame(sessions_frame)
         button_row.pack(fill="x", padx=8, pady=(0, 8))
@@ -467,14 +475,65 @@ class BreathingLabelerApp:
         sensor_session = self.storage.find_sensor_session_at(current_ns)
         sensor_session_id = int(sensor_session["id"]) if sensor_session is not None else None
 
-        live_estimate = self._load_live_estimate(current_ns, sensor_session_id)
+        waveform_view = self._resolve_waveform_view(current_ns, sensor_session_id)
+        live_estimate = self._load_live_estimate(
+            waveform_view.reference_ns,
+            waveform_view.sensor_session_id,
+        )
         self._load_saved_sessions()
-        self._update_summary(live_estimate, sensor_session_id)
-        self._draw_waveform(sensor_session_id, current_ns)
+        self._update_summary(live_estimate, waveform_view.sensor_session_id)
+        self._draw_waveform(waveform_view.sensor_session_id, waveform_view.reference_ns)
         self._load_recent_labels()
 
     def _focused_annotation_session_id(self) -> int | None:
         return self.active_annotation_session_id or self.selected_annotation_session_id
+
+    def _resolve_waveform_view(
+        self,
+        current_ns: int,
+        sensor_session_id: int | None,
+    ) -> WaveformView:
+        if self.active_annotation_session_id is not None:
+            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=current_ns)
+
+        target_session_id = self.selected_annotation_session_id
+        if target_session_id is None:
+            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=current_ns)
+
+        annotation_session = self.storage.get_annotation_session(target_session_id)
+        if annotation_session is None:
+            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=current_ns)
+
+        linked_sensor_session_id = annotation_session["linked_session_id"]
+        focused_sensor_session_id = (
+            int(linked_sensor_session_id) if linked_sensor_session_id is not None else sensor_session_id
+        )
+        reference_ns = self._annotation_reference_time_ns(annotation_session)
+        return WaveformView(
+            sensor_session_id=focused_sensor_session_id,
+            reference_ns=reference_ns,
+        )
+
+    def _annotation_reference_time_ns(self, annotation_session: object) -> int:
+        session_id = int(annotation_session["id"])
+        latest_label = self.storage.connection.execute(
+            """
+            SELECT recorded_at_ns
+            FROM breathing_phase_labels
+            WHERE annotation_session_id = ?
+            ORDER BY recorded_at_ns DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if latest_label is not None:
+            return int(latest_label["recorded_at_ns"])
+
+        ended_at_ns = annotation_session["ended_at_ns"]
+        if ended_at_ns is not None:
+            return int(ended_at_ns)
+
+        return int(annotation_session["started_at_ns"])
 
     def _load_live_estimate(
         self,
