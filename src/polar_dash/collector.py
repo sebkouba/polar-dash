@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from bleak import BleakClient, BleakScanner
-from bleak.exc import BleakError
 from bleakheart import BatteryLevel, HeartRate, PolarMeasurementData
 
 from polar_dash.storage import DEFAULT_DB_PATH, Storage
@@ -30,20 +29,29 @@ class CollectorConfig:
 
 
 async def scan_for_devices(prefix: str, timeout: float) -> list[dict[str, Any]]:
-    devices = await BleakScanner.discover(timeout=timeout)
+    devices = await _discover_matching_devices(prefix, timeout)
     matches: list[dict[str, Any]] = []
+    for device in devices:
+        matches.append(
+            {
+                "name": device.name or "",
+                "address": device.address,
+                "rssi": getattr(device, "rssi", None),
+            }
+        )
+    matches.sort(key=lambda item: (item["name"], item["address"]))
+    return matches
+
+
+async def _discover_matching_devices(prefix: str, timeout: float) -> list[Any]:
+    devices = await BleakScanner.discover(timeout=timeout)
     prefix_lower = prefix.lower()
+    matches: list[Any] = []
     for device in devices:
         name = device.name or ""
         if prefix_lower in name.lower():
-            matches.append(
-                {
-                    "name": name,
-                    "address": device.address,
-                    "rssi": getattr(device, "rssi", None),
-                }
-            )
-    matches.sort(key=lambda item: (item["name"], item["address"]))
+            matches.append(device)
+    matches.sort(key=lambda item: ((item.name or ""), item.address))
     return matches
 
 
@@ -91,15 +99,14 @@ class PolarCollector:
             return
 
     async def _find_device(self) -> Any | None:
-        matches = await scan_for_devices(self.config.device_name_prefix, self.config.scan_timeout)
+        matches = await _discover_matching_devices(
+            self.config.device_name_prefix,
+            self.config.scan_timeout,
+        )
         if not matches:
             return None
-        logger.info("Using %s (%s)", matches[0]["name"], matches[0]["address"])
-        devices = await BleakScanner.discover(timeout=1.0)
-        for device in devices:
-            if device.address == matches[0]["address"]:
-                return device
-        return None
+        logger.info("Using %s (%s)", matches[0].name or "", matches[0].address)
+        return matches[0]
 
     async def _collect_session(self, device: Any) -> None:
         device_name = device.name or self.config.device_name_prefix

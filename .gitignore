@@ -3,7 +3,5 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .DS_Store
-data/*.db
-data/*.sqlite
-data/*.sqlite3
+data/
 streamlit.log

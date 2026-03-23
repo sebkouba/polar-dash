@@ -105,45 +105,49 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "scan":
-        devices = asyncio.run(scan_for_devices(args.prefix, args.timeout))
-        if not devices:
-            print("No matching devices found.")
-            return 1
-        for device in devices:
-            rssi = device["rssi"]
-            rssi_text = f" RSSI={rssi}" if rssi is not None else ""
-            print(f'{device["name"]} [{device["address"]}]{rssi_text}')
-        return 0
+    try:
+        if args.command == "scan":
+            devices = asyncio.run(scan_for_devices(args.prefix, args.timeout))
+            if not devices:
+                print("No matching devices found.")
+                return 1
+            for device in devices:
+                rssi = device["rssi"]
+                rssi_text = f" RSSI={rssi}" if rssi is not None else ""
+                print(f'{device["name"]} [{device["address"]}]{rssi_text}')
+            return 0
 
-    if args.command == "collect":
-        config = CollectorConfig(
-            device_name_prefix=args.prefix,
-            db_path=args.db,
-            scan_timeout=args.scan_timeout,
-            reconnect_delay=args.reconnect_delay,
-            capture_ecg=not args.no_ecg,
-            capture_acc=not args.no_acc,
-            once=args.once,
-        )
-        asyncio.run(run_collection(config))
-        return 0
+        if args.command == "collect":
+            config = CollectorConfig(
+                device_name_prefix=args.prefix,
+                db_path=args.db,
+                scan_timeout=args.scan_timeout,
+                reconnect_delay=args.reconnect_delay,
+                capture_ecg=not args.no_ecg,
+                capture_acc=not args.no_acc,
+                once=args.once,
+            )
+            asyncio.run(run_collection(config))
+            return 0
 
-    if args.command == "dashboard":
-        os.environ["POLAR_DASH_DB"] = str(Path(args.db).expanduser().resolve())
-        dashboard_path = Path(__file__).with_name("dashboard.py")
-        run_streamlit(
-            str(dashboard_path),
-            False,
-            [],
-            {
-                "server.headless": True,
-                "server.address": args.host,
-                "server.port": args.port,
-                "browser.gatherUsageStats": False,
-            },
-        )
-        return 0
+        if args.command == "dashboard":
+            os.environ["POLAR_DASH_DB"] = str(Path(args.db).expanduser().resolve())
+            dashboard_path = Path(__file__).with_name("dashboard.py")
+            run_streamlit(
+                str(dashboard_path),
+                False,
+                [],
+                {
+                    "server.headless": True,
+                    "server.address": args.host,
+                    "server.port": args.port,
+                    "browser.gatherUsageStats": False,
+                },
+            )
+            return 0
+    except KeyboardInterrupt:
+        print("Interrupted.")
+        return 130
 
     parser.print_help()
     return 1
