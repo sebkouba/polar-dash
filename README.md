@@ -18,7 +18,7 @@ The menu bar companion keeps the latest breathing rate, heart rate, and HRV visi
 
 ![Breathing cockpit](docs/images/cockpit-demo.png)
 
-The cockpit is the heavier live view: raw ECG, accelerometer traces, breathing candidates, fusion output, and optional labeling controls for quick calibration experiments.
+The cockpit is the heavier live view: raw ECG, accelerometer traces, breathing candidates, fusion output, and a visible shortcut panel for quick labeling/calibration sessions.
 
 ## Why This Exists
 
@@ -96,6 +96,14 @@ swift build --package-path macos/BreathingBar
 ```
 
 The `install-hr-stack.sh` helper installs `hron` and `hroff`, which wrap the cockpit and the menu bar app for quick local start/stop cycles.
+
+## Keyboard Shortcuts
+
+The cockpit shows the shortcuts in the sidebar, and the label keys are active once you start a label session:
+
+- `F`: mark "finished exhaling"
+- `G`: mark "finished inhaling"
+- `Esc`: close the cockpit
 
 ## How Breathing Is Estimated
 
