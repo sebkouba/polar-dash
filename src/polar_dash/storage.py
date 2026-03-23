@@ -361,6 +361,37 @@ class Storage:
             (annotation_session_id,),
         ).fetchone()
 
+    def list_annotation_sessions(self, *, include_active: bool = True) -> list[sqlite3.Row]:
+        active_filter = ""
+        if not include_active:
+            active_filter = "WHERE annotation_sessions.ended_at_ns IS NOT NULL"
+        return list(
+            self.connection.execute(
+                f"""
+                SELECT
+                    annotation_sessions.*,
+                    COUNT(breathing_phase_labels.id) AS label_count
+                FROM annotation_sessions
+                LEFT JOIN breathing_phase_labels
+                    ON breathing_phase_labels.annotation_session_id = annotation_sessions.id
+                {active_filter}
+                GROUP BY annotation_sessions.id
+                ORDER BY annotation_sessions.started_at_ns DESC
+                """
+            ).fetchall()
+        )
+
+    def delete_annotation_session(self, annotation_session_id: int) -> bool:
+        cursor = self.connection.execute(
+            """
+            DELETE FROM annotation_sessions
+            WHERE id = ?
+            """,
+            (annotation_session_id,),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
     def find_sensor_session_at(self, recorded_at_ns: int | None = None) -> sqlite3.Row | None:
         target_ns = recorded_at_ns or time.time_ns()
         row = self.connection.execute(

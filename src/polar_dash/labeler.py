@@ -76,6 +76,7 @@ class BreathingLabelerApp:
         )
         self.last_label_var = tk.StringVar(master=self.root, value="Last label: none")
         self.count_var = tk.StringVar(master=self.root, value="Labels recorded: 0")
+        self.saved_session_var = tk.StringVar(master=self.root, value="Saved sessions")
 
         self.graph = tk.Canvas(
             self.root,
@@ -86,6 +87,7 @@ class BreathingLabelerApp:
             highlightbackground="#d4d4d0",
         )
         self.recent_list = tk.Listbox(self.root, height=12, activestyle="none")
+        self.sessions_list = tk.Listbox(self.root, height=12, activestyle="none", exportselection=False)
 
         self._build_ui()
         self._bind_keys()
@@ -156,9 +158,31 @@ class BreathingLabelerApp:
         ttk.Label(feedback, textvariable=self.last_label_var).pack(anchor="w")
         ttk.Label(feedback, textvariable=self.count_var).pack(anchor="w", pady=(0, 8))
 
-        recent_frame = ttk.LabelFrame(self.root, text="Recent Labels")
-        recent_frame.pack(fill="both", expand=True)
+        lower = ttk.Frame(self.root)
+        lower.pack(fill="both", expand=True)
+
+        recent_frame = ttk.LabelFrame(lower, text="Recent Labels")
+        recent_frame.pack(side="left", fill="both", expand=True)
         self.recent_list.pack(in_=recent_frame, fill="both", expand=True, padx=8, pady=8)
+
+        sessions_frame = ttk.LabelFrame(lower, text="Saved Sessions")
+        sessions_frame.pack(side="left", fill="both", expand=False, padx=(12, 0))
+        ttk.Label(
+            sessions_frame,
+            text="Select a saved session to inspect it or delete it.",
+            wraplength=250,
+        ).pack(anchor="w", padx=8, pady=(8, 6))
+        self.sessions_list.pack(in_=sessions_frame, fill="both", expand=True, padx=8, pady=(0, 8))
+        button_row = ttk.Frame(sessions_frame)
+        button_row.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Button(button_row, text="Delete Selected", command=self.delete_selected_session).pack(
+            side="left"
+        )
+        ttk.Label(
+            sessions_frame,
+            textvariable=self.saved_session_var,
+            wraplength=250,
+        ).pack(anchor="w", padx=8, pady=(0, 8))
 
         status = ttk.Label(
             self.root,
@@ -177,6 +201,7 @@ class BreathingLabelerApp:
         self.root.bind("<KeyPress-q>", self._quit_event)
         self.root.bind("<KeyPress-Q>", self._quit_event)
         self.root.bind("<Escape>", self._quit_event)
+        self.sessions_list.bind("<<ListboxSelect>>", self._select_saved_session)
 
     def _post_init_focus(self) -> None:
         self.root.deiconify()
@@ -237,6 +262,35 @@ class BreathingLabelerApp:
         )
         self.session_name_var.set(time.strftime("breathing_labels_%Y%m%d_%H%M%S"))
         self._refresh_view()
+
+    def delete_selected_session(self) -> None:
+        selection = self.sessions_list.curselection()
+        if not selection:
+            self.status_var.set("Select a saved session to delete.")
+            self.root.bell()
+            return
+
+        session_id = self._selected_saved_session_id()
+        if session_id is None:
+            self.status_var.set("Could not resolve the selected saved session.")
+            self.root.bell()
+            return
+
+        if self.annotation_session_id == session_id:
+            self.status_var.set("Stop the active session before deleting it.")
+            self.root.bell()
+            return
+
+        if self.storage.delete_annotation_session(session_id):
+            if self.last_annotation_session_id == session_id:
+                self.last_annotation_session_id = None
+            self.saved_session_var.set(f"Deleted saved session {session_id}.")
+            self.status_var.set(f"Deleted annotation session {session_id}.")
+            self._refresh_view()
+            return
+
+        self.status_var.set(f"Annotation session {session_id} was not found.")
+        self.root.bell()
 
     def close(self) -> None:
         try:
@@ -335,6 +389,7 @@ class BreathingLabelerApp:
         self._update_summary(live_estimate, sensor_session_id)
         self._draw_waveform(sensor_session_id, current_ns)
         self._load_recent_labels()
+        self._load_saved_sessions()
 
     def _load_live_estimate(
         self,
@@ -609,6 +664,59 @@ class BreathingLabelerApp:
             (target_session_id,),
         ).fetchone()[0]
         self.count_var.set(f"Labels recorded: {count}")
+
+    def _load_saved_sessions(self) -> None:
+        rows = self.storage.list_annotation_sessions(include_active=False)
+        selected_session_id = self._selected_saved_session_id()
+        self.sessions_list.delete(0, tk.END)
+
+        if not rows:
+            self.sessions_list.insert(tk.END, "No saved sessions yet.")
+            self.saved_session_var.set("Saved sessions: 0")
+            return
+
+        restored_index: int | None = None
+        for index, row in enumerate(rows):
+            session_id = int(row["id"])
+            started_text = time.strftime(
+                "%Y-%m-%d %H:%M:%S",
+                time.localtime(int(row["started_at_ns"]) / 1_000_000_000),
+            )
+            label_count = int(row["label_count"])
+            name = str(row["name"])
+            self.sessions_list.insert(
+                tk.END,
+                f"{session_id}: {name}  [{label_count} labels]  {started_text}",
+            )
+            if selected_session_id == session_id:
+                restored_index = index
+            elif restored_index is None and self.last_annotation_session_id == session_id:
+                restored_index = index
+
+        if restored_index is not None:
+            self.sessions_list.selection_set(restored_index)
+            self.sessions_list.activate(restored_index)
+            self.sessions_list.see(restored_index)
+
+        self.saved_session_var.set(f"Saved sessions: {len(rows)}")
+
+    def _selected_saved_session_id(self) -> int | None:
+        selection = self.sessions_list.curselection()
+        if not selection:
+            return None
+        value = self.sessions_list.get(selection[0])
+        prefix = value.split(":", 1)[0].strip()
+        if not prefix.isdigit():
+            return None
+        return int(prefix)
+
+    def _select_saved_session(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        session_id = self._selected_saved_session_id()
+        if session_id is None:
+            return
+        self.last_annotation_session_id = session_id
+        self.status_var.set(f"Viewing saved annotation session {session_id}.")
+        self._refresh_view()
 
 
 def run_labeler(db_path: Path | str = DEFAULT_DB_PATH, name: str | None = None) -> None:
