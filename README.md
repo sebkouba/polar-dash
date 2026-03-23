@@ -1,3 +1,8 @@
+# Code Rating
+- vibe slop
+- brittle
+- working
+
 # Polar Dash
 
 Polar Dash is a fast personal prototype for turning a Polar H10 chest strap into a lightweight macOS breathing and heart-rate monitor.
