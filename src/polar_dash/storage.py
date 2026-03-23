@@ -394,17 +394,7 @@ class Storage:
 
     def find_sensor_session_at(self, recorded_at_ns: int | None = None) -> sqlite3.Row | None:
         target_ns = recorded_at_ns or time.time_ns()
-        row = self.connection.execute(
-            """
-            SELECT *
-            FROM sessions
-            WHERE started_at_ns <= ?
-              AND (ended_at_ns IS NULL OR ended_at_ns >= ?)
-            ORDER BY started_at_ns DESC
-            LIMIT 1
-            """,
-            (target_ns, target_ns),
-        ).fetchone()
+        row = self.find_active_sensor_session_at(target_ns)
         if row is not None:
             return row
         return self.connection.execute(
@@ -416,6 +406,50 @@ class Storage:
             LIMIT 1
             """,
             (target_ns,),
+        ).fetchone()
+
+    def find_active_sensor_session_at(self, recorded_at_ns: int | None = None) -> sqlite3.Row | None:
+        target_ns = recorded_at_ns or time.time_ns()
+        return self.connection.execute(
+            """
+            SELECT *
+            FROM sessions
+            WHERE started_at_ns <= ?
+              AND (ended_at_ns IS NULL OR ended_at_ns >= ?)
+            ORDER BY started_at_ns DESC
+            LIMIT 1
+            """,
+            (target_ns, target_ns),
+        ).fetchone()
+
+    def find_live_sensor_session_at(
+        self,
+        recorded_at_ns: int | None = None,
+        *,
+        max_idle_ns: int = 10_000_000_000,
+    ) -> sqlite3.Row | None:
+        target_ns = recorded_at_ns or time.time_ns()
+        return self.connection.execute(
+            """
+            SELECT sessions.*
+            FROM sessions
+            WHERE sessions.started_at_ns <= ?
+              AND (sessions.ended_at_ns IS NULL OR sessions.ended_at_ns >= ?)
+              AND EXISTS (
+                  SELECT 1
+                  FROM acc_frames
+                  WHERE acc_frames.session_id = sessions.id
+                    AND acc_frames.sensor_recorded_at_ns BETWEEN ? AND ?
+              )
+            ORDER BY sessions.started_at_ns DESC
+            LIMIT 1
+            """,
+            (
+                target_ns,
+                target_ns,
+                target_ns - max_idle_ns,
+                target_ns,
+            ),
         ).fetchone()
 
     def find_nearest_breathing_estimate(

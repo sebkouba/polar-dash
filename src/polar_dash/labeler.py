@@ -325,13 +325,18 @@ class BreathingLabelerApp:
             self.status_var.set("A labeling session is already active.")
             return
 
-        current_sensor_session = self.storage.find_sensor_session_at()
+        current_sensor_session = self.storage.find_live_sensor_session_at()
+        if current_sensor_session is None:
+            self.status_var.set(
+                "No active sensor session is available. Start `polar-dash collect` before labeling."
+            )
+            self.root.bell()
+            return
+
         self.active_annotation_session_id = self.storage.start_annotation_session(
             name=self.session_name_var.get().strip() or time.strftime("breathing_labels_%Y%m%d_%H%M%S"),
             protocol_name=PROTOCOL_NAME,
-            linked_session_id=(
-                int(current_sensor_session["id"]) if current_sensor_session is not None else None
-            ),
+            linked_session_id=int(current_sensor_session["id"]),
             notes={"key_bindings": KEY_BINDINGS},
         )
         self.selected_annotation_session_id = self.active_annotation_session_id
@@ -442,7 +447,13 @@ class BreathingLabelerApp:
     def _record_phase_key(self, key_name: str, *, trigger_key_name: str | None = None) -> None:
         recorded_at_ns = time.time_ns()
         phase_code, description, _ = KEY_BINDINGS[key_name]
-        sensor_session = self.storage.find_sensor_session_at(recorded_at_ns)
+        sensor_session = self.storage.find_live_sensor_session_at(recorded_at_ns)
+        if sensor_session is None:
+            self.status_var.set(
+                "No active sensor session is available. Live labels need current collector data."
+            )
+            self.root.bell()
+            return
         sensor_session_id = int(sensor_session["id"]) if sensor_session is not None else None
         estimate = self.storage.find_nearest_breathing_estimate(
             recorded_at_ns,
@@ -524,7 +535,7 @@ class BreathingLabelerApp:
 
     def _refresh_view(self) -> None:
         current_ns = time.time_ns()
-        sensor_session = self.storage.find_sensor_session_at(current_ns)
+        sensor_session = self.storage.find_live_sensor_session_at(current_ns)
         sensor_session_id = int(sensor_session["id"]) if sensor_session is not None else None
 
         waveform_view = self._resolve_waveform_view(current_ns, sensor_session_id)
@@ -546,18 +557,7 @@ class BreathingLabelerApp:
         sensor_session_id: int | None,
     ) -> WaveformView:
         if self.active_annotation_session_id is not None:
-            active_session = self.storage.get_annotation_session(self.active_annotation_session_id)
-            focused_sensor_session_id = sensor_session_id
-            if active_session is not None and active_session["linked_session_id"] is not None:
-                focused_sensor_session_id = int(active_session["linked_session_id"])
-            reference_ns = self._preview_reference_time_ns(
-                focused_sensor_session_id,
-                preferred_reference_ns=current_ns,
-            )
-            return WaveformView(
-                sensor_session_id=focused_sensor_session_id,
-                reference_ns=reference_ns,
-            )
+            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=current_ns)
 
         target_session_id = self.selected_annotation_session_id
         if target_session_id is None:
@@ -866,6 +866,7 @@ class BreathingLabelerApp:
         if target_session_id is None:
             return
 
+        max_marker_lead_ns = 5_000_000_000
         marker_rows = self.storage.connection.execute(
             """
             SELECT recorded_at_ns, key_name, phase_code
@@ -878,10 +879,19 @@ class BreathingLabelerApp:
         ).fetchall()
         for row in marker_rows:
             recorded_at_ns = int(row["recorded_at_ns"])
-            if recorded_at_ns < int(x0) or recorded_at_ns > int(x1):
+            if recorded_at_ns < int(x0):
                 continue
             color = KEY_BINDINGS[str(row["key_name"]).lower()][2]
-            x = padding_left + ((recorded_at_ns - int(x0)) / duration_ns) * usable_width
+            marker_timestamp_ns = recorded_at_ns
+            if recorded_at_ns > int(x1):
+                is_live_active_marker = (
+                    self.active_annotation_session_id == target_session_id
+                    and recorded_at_ns - int(x1) <= max_marker_lead_ns
+                )
+                if not is_live_active_marker:
+                    continue
+                marker_timestamp_ns = int(x1)
+            x = padding_left + ((marker_timestamp_ns - int(x0)) / duration_ns) * usable_width
             self.graph.create_line(x, padding_top, x, height - padding_bottom, fill=color, width=2)
             self.graph.create_text(
                 x + 4,
@@ -945,7 +955,11 @@ class BreathingLabelerApp:
 
     def _load_saved_sessions(self) -> None:
         rows = self.storage.list_annotation_sessions(include_active=True)
-        selected_session_id = self._selected_saved_session_id()
+        selected_session_id = (
+            self.active_annotation_session_id
+            or self.selected_annotation_session_id
+            or self._selected_saved_session_id()
+        )
         self._updating_session_list = True
         self.sessions_list.delete(0, tk.END)
 
@@ -1004,6 +1018,10 @@ class BreathingLabelerApp:
 
     def _select_saved_session(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         if self._updating_session_list:
+            return
+        if self.active_annotation_session_id is not None:
+            self.status_var.set("Stop the active session before browsing saved sessions.")
+            self._load_saved_sessions()
             return
         session_id = self._selected_saved_session_id()
         if session_id is None:
