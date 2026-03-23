@@ -439,6 +439,13 @@ class Storage:
             WHERE ABS(estimated_at_ns - ?) <= ?
               {session_filter}
             ORDER BY absolute_gap_ns ASC
+                   , CASE source
+                        WHEN 'fusion' THEN 0
+                        WHEN 'acc-pca' THEN 1
+                        WHEN 'acc' THEN 2
+                        WHEN 'ecg-qrs-slope' THEN 3
+                        ELSE 4
+                     END ASC
             LIMIT 1
             """,
             params,

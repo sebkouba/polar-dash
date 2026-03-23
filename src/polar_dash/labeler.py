@@ -18,6 +18,12 @@ from polar_dash.storage import DEFAULT_DB_PATH, Storage
 PROTOCOL_NAME = "breathing_phase_keys_v1"
 POLL_INTERVAL_MS = 250
 GRAPH_WINDOW_SECONDS = 60
+SURFACE_BG = "#f6f3ec"
+SURFACE_BORDER = "#cfc8bb"
+TEXT_FG = "#1f1f1f"
+MUTED_FG = "#5d5a53"
+ACCENT = "#005f73"
+ACCENT_LIGHT = "#dceff2"
 
 KEY_BINDINGS = {
     "h": ("inhale_end", "Finished inhaling", "#e76f51"),
@@ -54,8 +60,9 @@ class BreathingLabelerApp:
         self.root.configure(padx=14, pady=14)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
-        self.annotation_session_id: int | None = None
-        self.last_annotation_session_id: int | None = None
+        self.active_annotation_session_id: int | None = None
+        self.selected_annotation_session_id: int | None = None
+        self._updating_session_list = False
         self.session_name_var = tk.StringVar(
             master=self.root,
             value=name or time.strftime("breathing_labels_%Y%m%d_%H%M%S"),
@@ -84,17 +91,41 @@ class BreathingLabelerApp:
             self.root,
             width=800,
             height=260,
-            bg="#f7f7f2",
+            bg=SURFACE_BG,
             highlightthickness=1,
-            highlightbackground="#d4d4d0",
+            highlightbackground=SURFACE_BORDER,
+            highlightcolor=SURFACE_BORDER,
+            borderwidth=0,
         )
-        self.recent_list = tk.Listbox(self.root, height=12, activestyle="none")
+        self.recent_list = tk.Listbox(
+            self.root,
+            height=12,
+            activestyle="none",
+            bg=SURFACE_BG,
+            fg=TEXT_FG,
+            selectbackground=ACCENT,
+            selectforeground="#ffffff",
+            highlightthickness=1,
+            highlightbackground=SURFACE_BORDER,
+            highlightcolor=SURFACE_BORDER,
+            borderwidth=0,
+            font=("SF Pro Text", 12),
+        )
         self.sessions_list = tk.Listbox(
             self.root,
             height=12,
             width=42,
             activestyle="none",
             exportselection=False,
+            bg=SURFACE_BG,
+            fg=TEXT_FG,
+            selectbackground=ACCENT,
+            selectforeground="#ffffff",
+            highlightthickness=1,
+            highlightbackground=SURFACE_BORDER,
+            highlightcolor=SURFACE_BORDER,
+            borderwidth=0,
+            font=("SF Pro Text", 12),
         )
 
         self._build_ui()
@@ -138,8 +169,10 @@ class BreathingLabelerApp:
         ttk.Label(controls, text="Session name").pack(side="left")
         name_entry = ttk.Entry(controls, textvariable=self.session_name_var, width=34)
         name_entry.pack(side="left", padx=(8, 12))
-        ttk.Button(controls, text="Start Session", command=self.start_session).pack(side="left")
-        ttk.Button(controls, text="Stop && Save", command=self.stop_session).pack(
+        self.start_button = ttk.Button(controls, text="Start Session", command=self.start_session)
+        self.start_button.pack(side="left")
+        self.stop_button = ttk.Button(controls, text="Stop && Save", command=self.stop_session)
+        self.stop_button.pack(
             side="left", padx=(8, 0)
         )
         ttk.Button(controls, text="Refresh", command=self._refresh_view).pack(
@@ -197,11 +230,11 @@ class BreathingLabelerApp:
             anchor="w", padx=8, pady=(0, 8)
         )
 
-        sessions_frame = ttk.LabelFrame(sidebar, text="Saved Sessions")
+        sessions_frame = ttk.LabelFrame(sidebar, text="Session History")
         sessions_frame.pack(fill="both", expand=True)
         ttk.Label(
             sessions_frame,
-            text="Saved sessions appear here after Stop & Save. Select one to inspect it or delete it.",
+            text="All annotation sessions appear here. Active or saved state is shown inline. Select one to inspect it or delete it.",
             wraplength=300,
         ).pack(anchor="w", padx=8, pady=(8, 6))
         sessions_list_frame = ttk.Frame(sessions_frame)
@@ -216,7 +249,12 @@ class BreathingLabelerApp:
         sessions_scrollbar.pack(side="right", fill="y")
         button_row = ttk.Frame(sessions_frame)
         button_row.pack(fill="x", padx=8, pady=(0, 8))
-        ttk.Button(button_row, text="Delete Selected", command=self.delete_selected_session).pack(
+        self.delete_button = ttk.Button(
+            button_row,
+            text="Delete Selected",
+            command=self.delete_selected_session,
+        )
+        self.delete_button.pack(
             side="left"
         )
         ttk.Label(
@@ -271,12 +309,12 @@ class BreathingLabelerApp:
         self.root.mainloop()
 
     def start_session(self) -> None:
-        if self.annotation_session_id is not None:
+        if self.active_annotation_session_id is not None:
             self.status_var.set("A labeling session is already active.")
             return
 
         current_sensor_session = self.storage.find_sensor_session_at()
-        self.annotation_session_id = self.storage.start_annotation_session(
+        self.active_annotation_session_id = self.storage.start_annotation_session(
             name=self.session_name_var.get().strip() or time.strftime("breathing_labels_%Y%m%d_%H%M%S"),
             protocol_name=PROTOCOL_NAME,
             linked_session_id=(
@@ -284,22 +322,25 @@ class BreathingLabelerApp:
             ),
             notes={"key_bindings": KEY_BINDINGS},
         )
-        self.last_annotation_session_id = self.annotation_session_id
-        self.annotation_var.set(f"Annotation session: {self.annotation_session_id} (active)")
-        self.status_var.set("Session started. Tag phases with H / J / K / L.")
+        self.selected_annotation_session_id = self.active_annotation_session_id
+        self.annotation_var.set(f"Annotation session: {self.active_annotation_session_id} (active)")
+        self.status_var.set(
+            f"Started annotation session {self.active_annotation_session_id}. Tag phases with H / J / K / L."
+        )
         self._refresh_view()
 
     def stop_session(self) -> None:
-        if self.annotation_session_id is None:
+        if self.active_annotation_session_id is None:
             self.status_var.set("No active labeling session to stop.")
             return
 
-        self.storage.close_annotation_session(self.annotation_session_id)
-        self.status_var.set(f"Saved annotation session {self.annotation_session_id}.")
-        self.last_annotation_session_id = self.annotation_session_id
-        self.annotation_session_id = None
+        finished_session_id = self.active_annotation_session_id
+        self.storage.close_annotation_session(finished_session_id)
+        self.status_var.set(f"Saved annotation session {finished_session_id}.")
+        self.selected_annotation_session_id = finished_session_id
+        self.active_annotation_session_id = None
         self.annotation_var.set(
-            f"Annotation session: inactive (last saved {self.last_annotation_session_id})"
+            f"Annotation session: inactive (last saved {finished_session_id})"
         )
         self.session_name_var.set(time.strftime("breathing_labels_%Y%m%d_%H%M%S"))
         self._refresh_view()
@@ -317,14 +358,14 @@ class BreathingLabelerApp:
             self.root.bell()
             return
 
-        if self.annotation_session_id == session_id:
+        if self.active_annotation_session_id == session_id:
             self.status_var.set("Stop the active session before deleting it.")
             self.root.bell()
             return
 
         if self.storage.delete_annotation_session(session_id):
-            if self.last_annotation_session_id == session_id:
-                self.last_annotation_session_id = None
+            if self.selected_annotation_session_id == session_id:
+                self.selected_annotation_session_id = None
             self.saved_session_var.set(f"Deleted saved session {session_id}.")
             self.status_var.set(f"Deleted annotation session {session_id}.")
             self._refresh_view()
@@ -335,8 +376,8 @@ class BreathingLabelerApp:
 
     def close(self) -> None:
         try:
-            if self.annotation_session_id is not None:
-                self.storage.close_annotation_session(self.annotation_session_id)
+            if self.active_annotation_session_id is not None:
+                self.storage.close_annotation_session(self.active_annotation_session_id)
         finally:
             self.storage.close()
             self.root.destroy()
@@ -346,7 +387,7 @@ class BreathingLabelerApp:
         return "break"
 
     def _undo_last_label(self, _event: tk.Event[tk.Misc] | None = None) -> str:
-        target_session_id = self.annotation_session_id or self.last_annotation_session_id
+        target_session_id = self._focused_annotation_session_id()
         if target_session_id is None:
             self.status_var.set("No annotation session available to undo.")
             return "break"
@@ -358,7 +399,7 @@ class BreathingLabelerApp:
         return "break"
 
     def _on_phase_key(self, event: tk.Event[tk.Misc]) -> str:
-        if self.annotation_session_id is None:
+        if self.active_annotation_session_id is None:
             self.status_var.set("Start a session before recording breathing labels.")
             self.root.bell()
             return "break"
@@ -387,7 +428,7 @@ class BreathingLabelerApp:
             estimate_age_ms = abs(recorded_at_ns - estimate_time_ns) / 1_000_000
 
         self.storage.insert_breathing_phase_label(
-            self.annotation_session_id,
+            self.active_annotation_session_id,
             recorded_at_ns=recorded_at_ns,
             phase_code=phase_code,
             key_name=key_name.upper(),
@@ -400,7 +441,7 @@ class BreathingLabelerApp:
         self.storage.insert_event(
             "breathing_phase_label",
             {
-                "annotation_session_id": self.annotation_session_id,
+                "annotation_session_id": self.active_annotation_session_id,
                 "phase_code": phase_code,
                 "key_name": key_name.upper(),
             },
@@ -427,10 +468,13 @@ class BreathingLabelerApp:
         sensor_session_id = int(sensor_session["id"]) if sensor_session is not None else None
 
         live_estimate = self._load_live_estimate(current_ns, sensor_session_id)
+        self._load_saved_sessions()
         self._update_summary(live_estimate, sensor_session_id)
         self._draw_waveform(sensor_session_id, current_ns)
         self._load_recent_labels()
-        self._load_saved_sessions()
+
+    def _focused_annotation_session_id(self) -> int | None:
+        return self.active_annotation_session_id or self.selected_annotation_session_id
 
     def _load_live_estimate(
         self,
@@ -470,20 +514,38 @@ class BreathingLabelerApp:
         else:
             self.sensor_var.set(f"Sensor session: {sensor_session_id}")
 
-        if self.annotation_session_id is not None:
-            self.annotation_var.set(f"Annotation session: {self.annotation_session_id} (active)")
-            self.session_state_var.set(f"Recorder: ACTIVE on session {self.annotation_session_id}")
-            self.selection_var.set("Viewing: active recording")
-        elif self.last_annotation_session_id is not None:
+        if self.active_annotation_session_id is not None:
             self.annotation_var.set(
-                f"Annotation session: inactive (last saved {self.last_annotation_session_id})"
+                f"Annotation session: {self.active_annotation_session_id} (active)"
+            )
+            self.session_state_var.set(
+                f"Recorder: ACTIVE on session {self.active_annotation_session_id}"
+            )
+            self.selection_var.set("Viewing: active recording")
+        elif self.selected_annotation_session_id is not None:
+            self.annotation_var.set(
+                f"Annotation session: inactive (selected {self.selected_annotation_session_id})"
             )
             self.session_state_var.set("Recorder: idle")
-            self.selection_var.set(f"Viewing: saved session {self.last_annotation_session_id}")
+            self.selection_var.set(
+                f"Viewing: saved session {self.selected_annotation_session_id}"
+            )
         else:
             self.annotation_var.set("Annotation session: inactive")
             self.session_state_var.set("Recorder: idle")
             self.selection_var.set("Viewing: live feed")
+
+        self.start_button.state(
+            ["disabled"] if self.active_annotation_session_id is not None else ["!disabled"]
+        )
+        self.stop_button.state(
+            ["!disabled"] if self.active_annotation_session_id is not None else ["disabled"]
+        )
+        delete_disabled = (
+            self.selected_annotation_session_id is None
+            or self.selected_annotation_session_id == self.active_annotation_session_id
+        )
+        self.delete_button.state(["disabled"] if delete_disabled else ["!disabled"])
 
     def _load_waveform(
         self,
@@ -553,8 +615,16 @@ class BreathingLabelerApp:
 
     def _draw_waveform(self, sensor_session_id: int | None, current_ns: int) -> None:
         self.graph.delete("all")
-        width = int(self.graph["width"])
-        height = int(self.graph["height"])
+        width = max(self.graph.winfo_width(), int(self.graph["width"]))
+        height = max(self.graph.winfo_height(), int(self.graph["height"]))
+        self.graph.create_rectangle(
+            0,
+            0,
+            width,
+            height,
+            fill=SURFACE_BG,
+            outline=SURFACE_BORDER,
+        )
 
         waveform = self._load_waveform(sensor_session_id, current_ns)
         if waveform is None or len(waveform.values) < 2:
@@ -562,7 +632,7 @@ class BreathingLabelerApp:
                 width / 2,
                 height / 2,
                 text="Waiting for respiratory waveform",
-                fill="#666666",
+                fill=MUTED_FG,
                 font=("SF Pro Rounded", 16, "normal"),
             )
             return
@@ -596,12 +666,12 @@ class BreathingLabelerApp:
             midline_y,
             width - padding_right,
             midline_y,
-            fill="#d0d0ca",
+            fill=SURFACE_BORDER,
             dash=(4, 4),
         )
         self.graph.create_line(
             *points,
-            fill="#005f73",
+            fill=ACCENT,
             width=2,
             smooth=True,
         )
@@ -611,7 +681,7 @@ class BreathingLabelerApp:
             padding_top,
             anchor="nw",
             text=f"{max_value:0.2f}",
-            fill="#555555",
+            fill=MUTED_FG,
             font=("SF Pro Rounded", 10, "normal"),
         )
         self.graph.create_text(
@@ -619,7 +689,7 @@ class BreathingLabelerApp:
             height - padding_bottom,
             anchor="sw",
             text=f"{min_value:0.2f}",
-            fill="#555555",
+            fill=MUTED_FG,
             font=("SF Pro Rounded", 10, "normal"),
         )
         self.graph.create_text(
@@ -627,11 +697,11 @@ class BreathingLabelerApp:
             6,
             anchor="nw",
             text=f"Waveform source: {waveform.source}",
-            fill="#555555",
+            fill=MUTED_FG,
             font=("SF Pro Rounded", 10, "normal"),
         )
 
-        target_session_id = self.annotation_session_id or self.last_annotation_session_id
+        target_session_id = self._focused_annotation_session_id()
         if target_session_id is None:
             return
 
@@ -662,10 +732,10 @@ class BreathingLabelerApp:
             )
 
     def _load_recent_labels(self) -> None:
-        target_session_id = self.annotation_session_id or self.last_annotation_session_id
+        target_session_id = self._focused_annotation_session_id()
         self.recent_list.delete(0, tk.END)
         if target_session_id is None:
-            self.recent_list.insert(tk.END, "No annotation session yet.")
+            self.recent_list.insert(tk.END, "No annotation session selected yet.")
             self.last_label_var.set("Last label: none")
             self.count_var.set("Labels recorded: 0")
             return
@@ -713,13 +783,17 @@ class BreathingLabelerApp:
         self.count_var.set(f"Labels recorded: {count}")
 
     def _load_saved_sessions(self) -> None:
-        rows = self.storage.list_annotation_sessions(include_active=False)
+        rows = self.storage.list_annotation_sessions(include_active=True)
         selected_session_id = self._selected_saved_session_id()
+        self._updating_session_list = True
         self.sessions_list.delete(0, tk.END)
 
         if not rows:
-            self.sessions_list.insert(tk.END, "No saved sessions yet.")
-            self.saved_session_var.set("Saved sessions: 0. Use Stop & Save to finish a labeling run.")
+            self.sessions_list.insert(tk.END, "No annotation sessions yet.")
+            self.saved_session_var.set(
+                "Annotation sessions: 0. Use Start Session to create one."
+            )
+            self._updating_session_list = False
             return
 
         restored_index: int | None = None
@@ -731,14 +805,21 @@ class BreathingLabelerApp:
             )
             label_count = int(row["label_count"])
             name = str(row["name"])
+            status = "active" if row["ended_at_ns"] is None else "saved"
             self.sessions_list.insert(
                 tk.END,
-                f"{session_id}: {name}  [{label_count} labels]  {started_text}",
+                f"{session_id}: [{status}] {name}  [{label_count} labels]  {started_text}",
             )
             if selected_session_id == session_id:
                 restored_index = index
-            elif restored_index is None and self.last_annotation_session_id == session_id:
+            elif restored_index is None and self.selected_annotation_session_id == session_id:
                 restored_index = index
+            elif restored_index is None and self.active_annotation_session_id == session_id:
+                restored_index = index
+
+        if restored_index is None:
+            restored_index = 0
+            self.selected_annotation_session_id = int(rows[0]["id"])
 
         if restored_index is not None:
             self.sessions_list.selection_set(restored_index)
@@ -746,8 +827,9 @@ class BreathingLabelerApp:
             self.sessions_list.see(restored_index)
 
         self.saved_session_var.set(
-            f"Saved sessions: {len(rows)}. Latest saved session: {int(rows[0]['id'])}."
+            f"Annotation sessions: {len(rows)}. Latest session: {int(rows[0]['id'])}."
         )
+        self._updating_session_list = False
 
     def _selected_saved_session_id(self) -> int | None:
         selection = self.sessions_list.curselection()
@@ -760,10 +842,12 @@ class BreathingLabelerApp:
         return int(prefix)
 
     def _select_saved_session(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        if self._updating_session_list:
+            return
         session_id = self._selected_saved_session_id()
         if session_id is None:
             return
-        self.last_annotation_session_id = session_id
+        self.selected_annotation_session_id = session_id
         self.selection_var.set(f"Viewing: saved session {session_id}")
         self.status_var.set(f"Viewing saved annotation session {session_id}.")
         self._refresh_view()
