@@ -31,6 +31,7 @@ KEY_BINDINGS = {
     "k": ("exhale_end", "Finished exhaling", "#2a9d8f"),
     "l": ("inhale_start", "Started inhaling", "#f4a261"),
 }
+PHASE_CYCLE = ("j", "k", "l", "h")
 
 
 @dataclass(slots=True)
@@ -116,7 +117,8 @@ class BreathingLabelerApp:
             header,
             text=(
                 "This graph shows a respiratory waveform derived from the live strap data "
-                "rather than only the breathing rate. Press H / J / K / L while a session is active."
+                "rather than only the breathing rate. Press H / J / K / L while a session is active, "
+                "or use G to apply the next label in the breathing cycle."
             ),
             wraplength=800,
         )
@@ -179,7 +181,7 @@ class BreathingLabelerApp:
             ).pack(anchor="w", padx=8, pady=2)
         ttk.Label(
             key_frame,
-            text="U: undo last label    Q or Esc: quit",
+            text="G: next phase in cycle    U: undo last label    Q or Esc: quit",
         ).pack(anchor="w", padx=8, pady=(6, 6))
 
         feedback = ttk.Frame(content)
@@ -285,6 +287,8 @@ class BreathingLabelerApp:
             self.root.bind(f"<KeyPress-{key_name.upper()}>", self._on_phase_key)
         self.root.bind("<KeyPress-u>", self._undo_last_label)
         self.root.bind("<KeyPress-U>", self._undo_last_label)
+        self.root.bind("<KeyPress-g>", self._record_next_phase)
+        self.root.bind("<KeyPress-G>", self._record_next_phase)
         self.root.bind("<KeyPress-q>", self._quit_event)
         self.root.bind("<KeyPress-Q>", self._quit_event)
         self.root.bind("<Escape>", self._quit_event)
@@ -415,7 +419,27 @@ class BreathingLabelerApp:
         key_name = event.keysym.lower()
         if key_name not in KEY_BINDINGS:
             return "break"
+        self._record_phase_key(key_name)
+        return "break"
 
+    def _record_next_phase(self, _event: tk.Event[tk.Misc] | None = None) -> str:
+        if self.active_annotation_session_id is None:
+            self.status_var.set("Start a session before recording breathing labels.")
+            self.root.bell()
+            return "break"
+
+        next_key_name = self._next_cycle_key()
+        if next_key_name is None:
+            self.status_var.set(
+                "Record one phase manually with H / J / K / L before using G."
+            )
+            self.root.bell()
+            return "break"
+
+        self._record_phase_key(next_key_name, trigger_key_name="g")
+        return "break"
+
+    def _record_phase_key(self, key_name: str, *, trigger_key_name: str | None = None) -> None:
         recorded_at_ns = time.time_ns()
         phase_code, description, _ = KEY_BINDINGS[key_name]
         sensor_session = self.storage.find_sensor_session_at(recorded_at_ns)
@@ -452,18 +476,46 @@ class BreathingLabelerApp:
                 "annotation_session_id": self.active_annotation_session_id,
                 "phase_code": phase_code,
                 "key_name": key_name.upper(),
+                "trigger_key_name": (
+                    trigger_key_name.upper() if trigger_key_name is not None else key_name.upper()
+                ),
             },
             session_id=sensor_session_id,
             recorded_at_ns=recorded_at_ns,
         )
 
         label_time = time.strftime("%H:%M:%S", time.localtime(recorded_at_ns / 1_000_000_000))
+        status_prefix = key_name.upper()
+        if trigger_key_name is not None:
+            status_prefix = f"{trigger_key_name.upper()} -> {key_name.upper()}"
         self.status_var.set(
-            f"Recorded {key_name.upper()} -> {description} at {label_time}.{recorded_at_ns % 1_000_000_000:09d}"
+            f"Recorded {status_prefix} -> {description} at {label_time}.{recorded_at_ns % 1_000_000_000:09d}"
         )
         self.root.bell()
         self._refresh_view()
-        return "break"
+
+    def _next_cycle_key(self) -> str | None:
+        if self.active_annotation_session_id is None:
+            return None
+
+        row = self.storage.connection.execute(
+            """
+            SELECT key_name
+            FROM breathing_phase_labels
+            WHERE annotation_session_id = ?
+            ORDER BY recorded_at_ns DESC
+            LIMIT 1
+            """,
+            (self.active_annotation_session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+
+        last_key_name = str(row["key_name"]).lower()
+        if last_key_name not in PHASE_CYCLE:
+            return None
+        last_index = PHASE_CYCLE.index(last_key_name)
+        return PHASE_CYCLE[(last_index + 1) % len(PHASE_CYCLE)]
 
     def _poll(self) -> None:
         if self.root.winfo_exists():
