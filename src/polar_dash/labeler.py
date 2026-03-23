@@ -352,6 +352,17 @@ class BreathingLabelerApp:
             return
 
         finished_session_id = self.active_annotation_session_id
+        label_count = self.storage.count_breathing_phase_labels(finished_session_id)
+        if label_count == 0:
+            self.storage.delete_annotation_session(finished_session_id)
+            self.status_var.set(f"Discarded empty annotation session {finished_session_id}.")
+            self.selected_annotation_session_id = None
+            self.active_annotation_session_id = None
+            self.annotation_var.set("Annotation session: inactive")
+            self.session_name_var.set(time.strftime("breathing_labels_%Y%m%d_%H%M%S"))
+            self._refresh_view()
+            return
+
         self.storage.close_annotation_session(finished_session_id)
         self.status_var.set(f"Saved annotation session {finished_session_id}.")
         self.selected_annotation_session_id = finished_session_id
@@ -394,7 +405,10 @@ class BreathingLabelerApp:
     def close(self) -> None:
         try:
             if self.active_annotation_session_id is not None:
-                self.storage.close_annotation_session(self.active_annotation_session_id)
+                if self.storage.count_breathing_phase_labels(self.active_annotation_session_id) == 0:
+                    self.storage.delete_annotation_session(self.active_annotation_session_id)
+                else:
+                    self.storage.close_annotation_session(self.active_annotation_session_id)
         finally:
             self.storage.close()
             self.root.destroy()
@@ -972,13 +986,18 @@ class BreathingLabelerApp:
             return
 
         restored_index: int | None = None
-        for index, row in enumerate(rows):
+        visible_rows: list[object] = []
+        for row in rows:
             session_id = int(row["id"])
             started_text = time.strftime(
                 "%Y-%m-%d %H:%M:%S",
                 time.localtime(int(row["started_at_ns"]) / 1_000_000_000),
             )
             label_count = int(row["label_count"])
+            if label_count == 0 and session_id != self.active_annotation_session_id:
+                continue
+            index = len(visible_rows)
+            visible_rows.append(row)
             name = str(row["name"])
             status = "active" if row["ended_at_ns"] is None else "saved"
             self.sessions_list.insert(
@@ -992,9 +1011,18 @@ class BreathingLabelerApp:
             elif restored_index is None and self.active_annotation_session_id == session_id:
                 restored_index = index
 
+        if not visible_rows:
+            self.sessions_list.insert(tk.END, "No labeled annotation sessions yet.")
+            self.saved_session_var.set(
+                "Annotation sessions: 0. Start a session and add labels to keep it."
+            )
+            self.selected_annotation_session_id = self.active_annotation_session_id
+            self._updating_session_list = False
+            return
+
         if restored_index is None:
             restored_index = 0
-            self.selected_annotation_session_id = int(rows[0]["id"])
+            self.selected_annotation_session_id = int(visible_rows[0]["id"])
 
         if restored_index is not None:
             self.sessions_list.selection_set(restored_index)
@@ -1002,7 +1030,7 @@ class BreathingLabelerApp:
             self.sessions_list.see(restored_index)
 
         self.saved_session_var.set(
-            f"Annotation sessions: {len(rows)}. Latest session: {int(rows[0]['id'])}."
+            f"Annotation sessions: {len(visible_rows)}. Latest session: {int(visible_rows[0]['id'])}."
         )
         self._updating_session_list = False
 

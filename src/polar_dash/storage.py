@@ -361,6 +361,17 @@ class Storage:
             (annotation_session_id,),
         ).fetchone()
 
+    def count_breathing_phase_labels(self, annotation_session_id: int) -> int:
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM breathing_phase_labels
+            WHERE annotation_session_id = ?
+            """,
+            (annotation_session_id,),
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def list_annotation_sessions(self, *, include_active: bool = True) -> list[sqlite3.Row]:
         active_filter = ""
         if not include_active:
