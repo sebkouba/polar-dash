@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+from pathlib import Path
+from typing import Any, Sequence
+
+DEFAULT_DB_PATH = Path("data/polar_dash.db")
+
+
+class Storage:
+    def __init__(self, db_path: Path | str = DEFAULT_DB_PATH) -> None:
+        self.db_path = Path(db_path).expanduser().resolve()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(self.db_path)
+        self.connection.row_factory = sqlite3.Row
+        self._configure()
+        self._initialize()
+
+    def _configure(self) -> None:
+        self.connection.execute("PRAGMA foreign_keys = ON")
+        self.connection.execute("PRAGMA journal_mode = WAL")
+        self.connection.execute("PRAGMA synchronous = NORMAL")
+
+    def _initialize(self) -> None:
+        self.connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at_ns INTEGER NOT NULL,
+                ended_at_ns INTEGER,
+                device_name TEXT NOT NULL,
+                device_address TEXT NOT NULL,
+                battery_percent INTEGER,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS hr_frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                recorded_at_ns INTEGER NOT NULL,
+                average_hr_bpm REAL NOT NULL,
+                rr_intervals_ms_json TEXT NOT NULL,
+                energy_kj INTEGER,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS ecg_frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                sensor_recorded_at_ns INTEGER NOT NULL,
+                sample_rate_hz INTEGER NOT NULL,
+                sample_count INTEGER NOT NULL,
+                samples_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS acc_frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                sensor_recorded_at_ns INTEGER NOT NULL,
+                sample_rate_hz INTEGER NOT NULL,
+                sample_count INTEGER NOT NULL,
+                samples_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS collector_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+                recorded_at_ns INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                details_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sessions_started_at
+                ON sessions(started_at_ns DESC);
+            CREATE INDEX IF NOT EXISTS idx_hr_frames_session_time
+                ON hr_frames(session_id, recorded_at_ns);
+            CREATE INDEX IF NOT EXISTS idx_ecg_frames_session_time
+                ON ecg_frames(session_id, sensor_recorded_at_ns);
+            CREATE INDEX IF NOT EXISTS idx_acc_frames_session_time
+                ON acc_frames(session_id, sensor_recorded_at_ns);
+            CREATE INDEX IF NOT EXISTS idx_collector_events_session_time
+                ON collector_events(session_id, recorded_at_ns);
+            """
+        )
+        self.connection.commit()
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def start_session(self, device_name: str, device_address: str) -> int:
+        started_at_ns = time.time_ns()
+        cursor = self.connection.execute(
+            """
+            INSERT INTO sessions (started_at_ns, device_name, device_address)
+            VALUES (?, ?, ?)
+            """,
+            (started_at_ns, device_name, device_address),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def close_session(self, session_id: int) -> None:
+        self.connection.execute(
+            "UPDATE sessions SET ended_at_ns = ? WHERE id = ?",
+            (time.time_ns(), session_id),
+        )
+        self.connection.commit()
+
+    def update_session_battery(self, session_id: int, battery_percent: int) -> None:
+        self.connection.execute(
+            "UPDATE sessions SET battery_percent = ? WHERE id = ?",
+            (battery_percent, session_id),
+        )
+        self.connection.commit()
+
+    def insert_hr_frame(
+        self,
+        session_id: int,
+        recorded_at_ns: int,
+        average_hr_bpm: float,
+        rr_intervals_ms: Sequence[int],
+        energy_kj: int | None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO hr_frames (
+                session_id,
+                recorded_at_ns,
+                average_hr_bpm,
+                rr_intervals_ms_json,
+                energy_kj
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                recorded_at_ns,
+                average_hr_bpm,
+                json.dumps(list(rr_intervals_ms)),
+                energy_kj,
+            ),
+        )
+        self.connection.commit()
+
+    def insert_ecg_frame(
+        self,
+        session_id: int,
+        sensor_recorded_at_ns: int,
+        sample_rate_hz: int,
+        samples: Sequence[int],
+    ) -> None:
+        payload = list(samples)
+        self.connection.execute(
+            """
+            INSERT INTO ecg_frames (
+                session_id,
+                sensor_recorded_at_ns,
+                sample_rate_hz,
+                sample_count,
+                samples_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                sensor_recorded_at_ns,
+                sample_rate_hz,
+                len(payload),
+                json.dumps(payload),
+            ),
+        )
+        self.connection.commit()
+
+    def insert_acc_frame(
+        self,
+        session_id: int,
+        sensor_recorded_at_ns: int,
+        sample_rate_hz: int,
+        samples: Sequence[tuple[int, int, int]],
+    ) -> None:
+        payload = [list(sample) for sample in samples]
+        self.connection.execute(
+            """
+            INSERT INTO acc_frames (
+                session_id,
+                sensor_recorded_at_ns,
+                sample_rate_hz,
+                sample_count,
+                samples_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                sensor_recorded_at_ns,
+                sample_rate_hz,
+                len(payload),
+                json.dumps(payload),
+            ),
+        )
+        self.connection.commit()
+
+    def insert_event(
+        self,
+        event_type: str,
+        details: dict[str, Any],
+        *,
+        level: str = "INFO",
+        session_id: int | None = None,
+        recorded_at_ns: int | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO collector_events (
+                session_id,
+                recorded_at_ns,
+                level,
+                event_type,
+                details_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                recorded_at_ns or time.time_ns(),
+                level,
+                event_type,
+                json.dumps(details),
+            ),
+        )
+        self.connection.commit()
