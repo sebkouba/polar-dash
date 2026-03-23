@@ -9,22 +9,28 @@ private enum DefaultsKey {
     static let highThreshold = "highThreshold"
 }
 
-private struct BreathingPoint: Identifiable {
-    let timestampNs: Int64
-    let rate: Double
-
-    var id: Int64 { timestampNs }
-}
-
-private struct BreathingSnapshot {
+private struct HealthSnapshot {
     let databasePath: String?
-    let points: [BreathingPoint]
+    let breathingRate: Double?
+    let heartRate: Double?
+    let heartRateVariabilityMs: Double?
 }
 
 private final class SQLiteBreathingStore {
-    func loadSnapshot(limit: Int = 40) -> BreathingSnapshot {
+    struct HRFrame {
+        let recordedAtNs: Int64
+        let averageHeartRateBpm: Double
+        let rrIntervalsMs: [Double]
+    }
+
+    func loadSnapshot(limitHRFrames: Int = 24) -> HealthSnapshot {
         guard let databaseURL = resolveDatabaseURL() else {
-            return BreathingSnapshot(databasePath: nil, points: [])
+            return HealthSnapshot(
+                databasePath: nil,
+                breathingRate: nil,
+                heartRate: nil,
+                heartRateVariabilityMs: nil,
+            )
         }
 
         var handle: OpaquePointer?
@@ -32,20 +38,106 @@ private final class SQLiteBreathingStore {
             if let handle {
                 sqlite3_close(handle)
             }
-            return BreathingSnapshot(databasePath: databaseURL.path, points: [])
+            return HealthSnapshot(
+                databasePath: databaseURL.path,
+                breathingRate: nil,
+                heartRate: nil,
+                heartRateVariabilityMs: nil,
+            )
         }
         defer { sqlite3_close(handle) }
 
-        let query = """
-        SELECT estimated_at_ns, breaths_per_min
+        guard let sessionId = resolveActiveSessionId(handle) else {
+            return HealthSnapshot(
+                databasePath: databaseURL.path,
+                breathingRate: nil,
+                heartRate: nil,
+                heartRateVariabilityMs: nil,
+            )
+        }
+
+        let breathingRateQuery = """
+        SELECT breaths_per_min
         FROM breathing_estimates
-        WHERE session_id = (
-            SELECT id FROM sessions
-            ORDER BY started_at_ns DESC
-            LIMIT 1
-        )
+        WHERE session_id = ?
         ORDER BY estimated_at_ns DESC
+        LIMIT 1;
+        """
+
+        var breathingStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, breathingRateQuery, -1, &breathingStatement, nil) == SQLITE_OK else {
+            if let breathingStatement {
+                sqlite3_finalize(breathingStatement)
+            }
+            return HealthSnapshot(
+                databasePath: databaseURL.path,
+                breathingRate: nil,
+                heartRate: nil,
+                heartRateVariabilityMs: nil,
+            )
+        }
+        defer { sqlite3_finalize(breathingStatement) }
+
+        sqlite3_bind_int64(breathingStatement, 1, sessionId)
+        var breathingRate: Double?
+        if sqlite3_step(breathingStatement) == SQLITE_ROW {
+            breathingRate = sqlite3_column_double(breathingStatement, 0)
+        }
+
+        let hrQuery = """
+        SELECT recorded_at_ns, average_hr_bpm, rr_intervals_ms_json
+        FROM hr_frames
+        WHERE session_id = ?
+        ORDER BY recorded_at_ns DESC
         LIMIT ?;
+        """
+
+        var hrStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, hrQuery, -1, &hrStatement, nil) == SQLITE_OK else {
+            return HealthSnapshot(
+                databasePath: databaseURL.path,
+                breathingRate: breathingRate,
+                heartRate: nil,
+                heartRateVariabilityMs: nil,
+            )
+        }
+        defer { sqlite3_finalize(hrStatement) }
+
+        sqlite3_bind_int64(hrStatement, 1, sessionId)
+        sqlite3_bind_int(hrStatement, 2, Int32(limitHRFrames))
+
+        var heartRate: Double?
+        var hrFrames: [HRFrame] = []
+
+        while sqlite3_step(hrStatement) == SQLITE_ROW {
+            let recordedAtNs = sqlite3_column_int64(hrStatement, 0)
+            let averageHrBpm = sqlite3_column_double(hrStatement, 1)
+            let rrIntervals = parseRRIntervals(from: hrStatement!, column: 2)
+            if heartRate == nil {
+                heartRate = averageHrBpm
+            }
+            hrFrames.append(
+                HRFrame(
+                    recordedAtNs: recordedAtNs,
+                    averageHeartRateBpm: averageHrBpm,
+                    rrIntervalsMs: rrIntervals,
+                )
+            )
+        }
+
+        return HealthSnapshot(
+            databasePath: databaseURL.path,
+            breathingRate: breathingRate,
+            heartRate: heartRate,
+            heartRateVariabilityMs: computeHeartRateVariabilityMs(from: hrFrames),
+        )
+    }
+
+    private func resolveActiveSessionId(_ handle: OpaquePointer?) -> Int64? {
+        let query = """
+        SELECT id FROM sessions
+        ORDER BY started_at_ns DESC
+        LIMIT 1;
         """
 
         var statement: OpaquePointer?
@@ -53,23 +145,103 @@ private final class SQLiteBreathingStore {
             if let statement {
                 sqlite3_finalize(statement)
             }
-            return BreathingSnapshot(databasePath: databaseURL.path, points: [])
+            return nil
         }
         defer { sqlite3_finalize(statement) }
 
-        sqlite3_bind_int(statement, 1, Int32(limit))
-
-        var points: [BreathingPoint] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            let timestampNs = sqlite3_column_int64(statement, 0)
-            let rate = sqlite3_column_double(statement, 1)
-            points.append(BreathingPoint(timestampNs: timestampNs, rate: rate))
+        if sqlite3_step(statement) == SQLITE_ROW {
+            return sqlite3_column_int64(statement, 0)
         }
 
-        return BreathingSnapshot(
-            databasePath: databaseURL.path,
-            points: points.reversed()
-        )
+        return nil
+    }
+
+    private func parseRRIntervals(from statement: OpaquePointer, column: Int32) -> [Double] {
+        guard let rawText = sqlite3_column_text(statement, column) else {
+            return []
+        }
+        let rawLength = Int(sqlite3_column_bytes(statement, column))
+        guard rawLength > 0 else {
+            return []
+        }
+        let rawData = Data(bytes: rawText, count: rawLength)
+        guard let rawString = String(data: rawData, encoding: .utf8) else {
+            return []
+        }
+
+        guard let data = rawString.data(using: String.Encoding.utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) else {
+            return []
+        }
+
+        guard let values = parsed as? [Any] else {
+            return []
+        }
+
+        return values.compactMap { value -> Double? in
+            switch value {
+            case let value as Double:
+                return value
+            case let value as Int:
+                return Double(value)
+            case let value as NSNumber:
+                return value.doubleValue
+            default:
+                return nil
+            }
+        }
+    }
+
+    private func computeHeartRateVariabilityMs(from frames: [HRFrame]) -> Double? {
+        guard !frames.isEmpty else {
+            return nil
+        }
+
+        var rrValuesMs: [Double] = []
+        var beatTimesNs: [Int64] = []
+
+        for frame in frames.reversed() {
+            let intervals = frame.rrIntervalsMs.filter { $0 > 0 }
+            if intervals.isEmpty {
+                continue
+            }
+
+            let frameTotalNs = Int64(intervals.reduce(0.0, +) * 1_000_000)
+            var currentBeatNs = frame.recordedAtNs - frameTotalNs
+            for intervalMs in intervals {
+                currentBeatNs += Int64(intervalMs * 1_000_000)
+                rrValuesMs.append(intervalMs)
+                beatTimesNs.append(currentBeatNs)
+            }
+        }
+
+        guard let latestBeatNs = beatTimesNs.last else {
+            return nil
+        }
+        guard rrValuesMs.count >= 5 else {
+            return nil
+        }
+
+        let windowNs: Int64 = 60_000_000_000
+        var startIndex = 0
+        while latestBeatNs - beatTimesNs[startIndex] > windowNs, startIndex + 1 < beatTimesNs.count {
+            startIndex += 1
+        }
+        let windowRR = Array(rrValuesMs[startIndex...])
+        guard windowRR.count >= 5 else {
+            return nil
+        }
+
+        var sumSquares: Double = 0
+        for index in 1..<windowRR.count {
+            let delta = windowRR[index] - windowRR[index - 1]
+            sumSquares += delta * delta
+        }
+        let sampleCount = Double(windowRR.count - 1)
+        guard sampleCount > 0 else {
+            return nil
+        }
+        return sqrt(sumSquares / sampleCount)
     }
 
     private func resolveDatabaseURL() -> URL? {
@@ -108,8 +280,9 @@ private final class SQLiteBreathingStore {
 
 @MainActor
 private final class BreathingBarModel: ObservableObject {
-    @Published var currentRate: Double?
-    @Published var history: [Double] = []
+    @Published var currentBreathingRate: Double?
+    @Published var currentHeartRate: Double?
+    @Published var currentHeartRateVariability: Double?
     @Published var databasePath: String = "Database not found"
     @Published var lowerThreshold: Double
     @Published var upperThreshold: Double
@@ -136,14 +309,14 @@ private final class BreathingBarModel: ObservableObject {
     }
 
     var isAlerting: Bool {
-        guard let currentRate else {
+        guard let currentBreathingRate else {
             return false
         }
-        return currentRate < lowerThreshold || currentRate > upperThreshold
+        return currentBreathingRate < lowerThreshold || currentBreathingRate > upperThreshold
     }
 
     var alertColor: Color {
-        guard currentRate != nil else {
+        guard currentBreathingRate != nil else {
             return .clear
         }
         if isAlerting && flashOn {
@@ -189,10 +362,11 @@ private final class BreathingBarModel: ObservableObject {
         }
     }
 
-    private func apply(snapshot: BreathingSnapshot) {
+    private func apply(snapshot: HealthSnapshot) {
         databasePath = snapshot.databasePath ?? "Database not found"
-        history = snapshot.points.map(\.rate)
-        currentRate = snapshot.points.last?.rate
+        currentBreathingRate = snapshot.breathingRate
+        currentHeartRate = snapshot.heartRate
+        currentHeartRateVariability = snapshot.heartRateVariabilityMs
     }
 }
 
@@ -202,68 +376,50 @@ private final class PassthroughHostingView<Content: View>: NSHostingView<Content
     }
 }
 
-private struct SparklineView: View {
-    let values: [Double]
-    let strokeColor: Color
-
-    var body: some View {
-        Canvas { context, size in
-            guard values.count > 1 else {
-                return
-            }
-
-            let minValue = values.min() ?? 0
-            let maxValue = values.max() ?? 1
-            let range = max(maxValue - minValue, 0.5)
-            let stepX = size.width / CGFloat(values.count - 1)
-
-            var path = Path()
-            for (index, value) in values.enumerated() {
-                let x = CGFloat(index) * stepX
-                let normalized = (value - minValue) / range
-                let y = size.height - (CGFloat(normalized) * size.height)
-                if index == 0 {
-                    path.move(to: CGPoint(x: x, y: y))
-                } else {
-                    path.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-
-            context.stroke(
-                path,
-                with: .color(strokeColor),
-                style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
-            )
-        }
-        .frame(height: 16)
-    }
-}
-
 private struct StatusBarView: View {
     @ObservedObject var model: BreathingBarModel
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(rateText)
+        HStack(spacing: 8) {
+            Text(breathingRateText)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            SparklineView(values: model.history, strokeColor: sparklineColor)
-                .frame(width: 40, height: 14)
+                .foregroundStyle(isActivelyFlashing ? Color.white : Color.blue)
+                .lineLimit(1)
+            Text(heartRateText)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(isActivelyFlashing ? Color.white : Color.red)
+                .lineLimit(1)
+            Text(hrvText)
+                .font(.system(size: 11, weight: .regular, design: .rounded))
+                .foregroundStyle(isActivelyFlashing ? Color.white : Color.green)
+                .lineLimit(1)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .foregroundStyle(isActivelyFlashing ? Color.white : Color.primary)
     }
 
-    private var rateText: String {
-        guard let currentRate = model.currentRate else {
-            return "--.-"
+    private var breathingRateText: String {
+        guard let currentBreathingRate = model.currentBreathingRate else {
+            return "--.- br/min"
         }
-        return String(format: "%.1f", currentRate)
+        return "\(String(format: "%.1f", currentBreathingRate)) br/min"
     }
 
-    private var sparklineColor: Color {
-        isActivelyFlashing ? .white : .accentColor
+    private var heartRateText: String {
+        guard let currentHeartRate = model.currentHeartRate else {
+            return "-- bpm"
+        }
+        return "\(String(format: "%.0f", currentHeartRate)) bpm"
+    }
+
+    private var hrvText: String {
+        guard let hrv = model.currentHeartRateVariability else {
+            return "-- ms"
+        }
+        return "\(String(format: "%.0f", hrv)) ms"
     }
 
     private var isActivelyFlashing: Bool {
@@ -277,21 +433,36 @@ private struct MenuContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Breathing Rate")
-                    .font(.headline)
-                Text(currentRateText)
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .monospacedDigit()
+                HStack(alignment: .firstTextBaseline, spacing: 18) {
+                    metricView(
+                        title: "Breathing Rate",
+                        text: currentBreathingRateText,
+                        color: flashingColor(for: .blue)
+                    )
+                    metricView(
+                        title: "Heart Rate",
+                        text: currentHeartRateText,
+                        color: flashingColor(for: .red)
+                    )
+                    metricView(
+                        title: "HRV (RMSSD)",
+                        text: currentHeartRateVariabilityText,
+                        color: flashingColor(for: .green)
+                    )
+                }
+                Divider()
+                Text("Breathing flash threshold uses most recent breathing-rate estimate.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            SparklineView(values: model.history, strokeColor: .accentColor)
-                .frame(height: 42)
-
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Stepper(
                     value: Binding(
                         get: { model.lowerThreshold },
-                        set: { model.setLowerThreshold($0) }
+                        set: { value in
+                            model.setLowerThreshold(value)
+                        }
                     ),
                     in: 4.0...20.0,
                     step: 0.5
@@ -330,11 +501,41 @@ private struct MenuContentView: View {
         .frame(width: 340)
     }
 
-    private var currentRateText: String {
-        guard let currentRate = model.currentRate else {
+    @ViewBuilder
+    private func metricView(title: String, text: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            Text(text)
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(color)
+        }
+    }
+
+    private var currentHeartRateText: String {
+        guard let currentHeartRate = model.currentHeartRate else {
+            return "--.- bpm"
+        }
+        return "\(String(format: "%.1f", currentHeartRate)) bpm"
+    }
+
+    private var currentHeartRateVariabilityText: String {
+        guard let currentHeartRateVariability = model.currentHeartRateVariability else {
+            return "--.- ms"
+        }
+        return "\(String(format: "%.1f", currentHeartRateVariability)) ms"
+    }
+
+    private var currentBreathingRateText: String {
+        guard let currentBreathingRate = model.currentBreathingRate else {
             return "--.- br/min"
         }
-        return "\(String(format: "%.1f", currentRate)) br/min"
+        return "\(String(format: "%.1f", currentBreathingRate)) br/min"
+    }
+
+    private func flashingColor(for color: Color) -> Color {
+        return model.isAlerting && model.flashOn ? .white : color
     }
 }
 
