@@ -546,21 +546,43 @@ class BreathingLabelerApp:
         sensor_session_id: int | None,
     ) -> WaveformView:
         if self.active_annotation_session_id is not None:
-            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=current_ns)
+            active_session = self.storage.get_annotation_session(self.active_annotation_session_id)
+            focused_sensor_session_id = sensor_session_id
+            if active_session is not None and active_session["linked_session_id"] is not None:
+                focused_sensor_session_id = int(active_session["linked_session_id"])
+            reference_ns = self._preview_reference_time_ns(
+                focused_sensor_session_id,
+                preferred_reference_ns=current_ns,
+            )
+            return WaveformView(
+                sensor_session_id=focused_sensor_session_id,
+                reference_ns=reference_ns,
+            )
 
         target_session_id = self.selected_annotation_session_id
         if target_session_id is None:
-            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=current_ns)
+            reference_ns = self._preview_reference_time_ns(
+                sensor_session_id,
+                preferred_reference_ns=current_ns,
+            )
+            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=reference_ns)
 
         annotation_session = self.storage.get_annotation_session(target_session_id)
         if annotation_session is None:
-            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=current_ns)
+            reference_ns = self._preview_reference_time_ns(
+                sensor_session_id,
+                preferred_reference_ns=current_ns,
+            )
+            return WaveformView(sensor_session_id=sensor_session_id, reference_ns=reference_ns)
 
         linked_sensor_session_id = annotation_session["linked_session_id"]
         focused_sensor_session_id = (
             int(linked_sensor_session_id) if linked_sensor_session_id is not None else sensor_session_id
         )
-        reference_ns = self._annotation_reference_time_ns(annotation_session)
+        reference_ns = self._preview_reference_time_ns(
+            focused_sensor_session_id,
+            preferred_reference_ns=self._annotation_reference_time_ns(annotation_session),
+        )
         return WaveformView(
             sensor_session_id=focused_sensor_session_id,
             reference_ns=reference_ns,
@@ -586,6 +608,29 @@ class BreathingLabelerApp:
             return int(ended_at_ns)
 
         return int(annotation_session["started_at_ns"])
+
+    def _preview_reference_time_ns(
+        self,
+        sensor_session_id: int | None,
+        *,
+        preferred_reference_ns: int,
+    ) -> int:
+        if sensor_session_id is None:
+            return preferred_reference_ns
+
+        latest_acc_row = self.storage.connection.execute(
+            """
+            SELECT MAX(sensor_recorded_at_ns) AS latest_sensor_recorded_at_ns
+            FROM acc_frames
+            WHERE session_id = ?
+            """,
+            (sensor_session_id,),
+        ).fetchone()
+        latest_acc_ns = latest_acc_row["latest_sensor_recorded_at_ns"] if latest_acc_row is not None else None
+        if latest_acc_ns is None:
+            return preferred_reference_ns
+
+        return min(preferred_reference_ns, int(latest_acc_ns))
 
     def _load_live_estimate(
         self,
@@ -672,9 +717,14 @@ class BreathingLabelerApp:
             FROM acc_frames
             WHERE session_id = ?
               AND sensor_recorded_at_ns >= ?
+              AND sensor_recorded_at_ns <= ?
             ORDER BY sensor_recorded_at_ns
             """,
-            (sensor_session_id, current_ns - GRAPH_WINDOW_SECONDS * 1_000_000_000),
+            (
+                sensor_session_id,
+                current_ns - GRAPH_WINDOW_SECONDS * 1_000_000_000,
+                current_ns,
+            ),
         ).fetchall()
         if len(rows) < 2:
             return None
