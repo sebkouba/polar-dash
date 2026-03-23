@@ -48,8 +48,8 @@ class BreathingLabelerApp:
 
         self.root = tk.Tk()
         self.root.title("Polar Dash Breathing Labeler")
-        self.root.geometry("860x720")
-        self.root.minsize(760, 640)
+        self.root.geometry("1040x720")
+        self.root.minsize(940, 640)
         self.root.attributes("-topmost", True)
         self.root.configure(padx=14, pady=14)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -87,7 +87,13 @@ class BreathingLabelerApp:
             highlightbackground="#d4d4d0",
         )
         self.recent_list = tk.Listbox(self.root, height=12, activestyle="none")
-        self.sessions_list = tk.Listbox(self.root, height=12, activestyle="none", exportselection=False)
+        self.sessions_list = tk.Listbox(
+            self.root,
+            height=12,
+            width=42,
+            activestyle="none",
+            exportselection=False,
+        )
 
         self._build_ui()
         self._bind_keys()
@@ -166,13 +172,24 @@ class BreathingLabelerApp:
         self.recent_list.pack(in_=recent_frame, fill="both", expand=True, padx=8, pady=8)
 
         sessions_frame = ttk.LabelFrame(lower, text="Saved Sessions")
-        sessions_frame.pack(side="left", fill="both", expand=False, padx=(12, 0))
+        sessions_frame.pack(side="left", fill="y", expand=False, padx=(12, 0))
+        sessions_frame.configure(width=340)
+        sessions_frame.pack_propagate(False)
         ttk.Label(
             sessions_frame,
-            text="Select a saved session to inspect it or delete it.",
+            text="Saved sessions appear here after Stop & Save. Select one to inspect it or delete it.",
             wraplength=250,
         ).pack(anchor="w", padx=8, pady=(8, 6))
-        self.sessions_list.pack(in_=sessions_frame, fill="both", expand=True, padx=8, pady=(0, 8))
+        sessions_list_frame = ttk.Frame(sessions_frame)
+        sessions_list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        sessions_scrollbar = ttk.Scrollbar(
+            sessions_list_frame,
+            orient="vertical",
+            command=self.sessions_list.yview,
+        )
+        self.sessions_list.configure(yscrollcommand=sessions_scrollbar.set)
+        self.sessions_list.pack(in_=sessions_list_frame, side="left", fill="both", expand=True)
+        sessions_scrollbar.pack(side="right", fill="y")
         button_row = ttk.Frame(sessions_frame)
         button_row.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(button_row, text="Delete Selected", command=self.delete_selected_session).pack(
@@ -206,7 +223,7 @@ class BreathingLabelerApp:
     def _post_init_focus(self) -> None:
         self.root.deiconify()
         self.root.update_idletasks()
-        width = max(self.root.winfo_width(), 860)
+        width = max(self.root.winfo_width(), 1040)
         height = max(self.root.winfo_height(), 720)
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
@@ -672,7 +689,7 @@ class BreathingLabelerApp:
 
         if not rows:
             self.sessions_list.insert(tk.END, "No saved sessions yet.")
-            self.saved_session_var.set("Saved sessions: 0")
+            self.saved_session_var.set("Saved sessions: 0. Use Stop & Save to finish a labeling run.")
             return
 
         restored_index: int | None = None
@@ -698,7 +715,9 @@ class BreathingLabelerApp:
             self.sessions_list.activate(restored_index)
             self.sessions_list.see(restored_index)
 
-        self.saved_session_var.set(f"Saved sessions: {len(rows)}")
+        self.saved_session_var.set(
+            f"Saved sessions: {len(rows)}. Latest saved session: {int(rows[0]['id'])}."
+        )
 
     def _selected_saved_session_id(self) -> int | None:
         selection = self.sessions_list.curselection()
