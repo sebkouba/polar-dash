@@ -3,7 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
+from pathlib import Path
 from typing import Sequence
+
+from streamlit.web.bootstrap import run as run_streamlit
 
 from polar_dash.collector import CollectorConfig, run_collection, scan_for_devices
 
@@ -69,6 +73,27 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exit instead of retrying forever if the device is missing or disconnects.",
     )
+
+    dashboard_parser = subparsers.add_parser(
+        "dashboard",
+        help="Launch the live Streamlit dashboard.",
+    )
+    dashboard_parser.add_argument(
+        "--db",
+        default="data/polar_dash.db",
+        help="SQLite file to read for persisted raw data.",
+    )
+    dashboard_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Streamlit bind address.",
+    )
+    dashboard_parser.add_argument(
+        "--port",
+        type=int,
+        default=8501,
+        help="Streamlit port.",
+    )
     return parser
 
 
@@ -102,6 +127,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             once=args.once,
         )
         asyncio.run(run_collection(config))
+        return 0
+
+    if args.command == "dashboard":
+        os.environ["POLAR_DASH_DB"] = str(Path(args.db).expanduser().resolve())
+        dashboard_path = Path(__file__).with_name("dashboard.py")
+        run_streamlit(
+            str(dashboard_path),
+            False,
+            [],
+            {
+                "server.headless": True,
+                "server.address": args.host,
+                "server.port": args.port,
+                "browser.gatherUsageStats": False,
+            },
+        )
         return 0
 
     parser.print_help()
