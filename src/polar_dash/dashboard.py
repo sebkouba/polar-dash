@@ -306,7 +306,7 @@ def render_line_chart(
         )
         .properties(height=240, title=title)
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
 
 lookback_minutes = st.sidebar.slider("Lookback window (minutes)", min_value=5, max_value=60, value=15, step=5)
@@ -332,7 +332,11 @@ def live_dashboard() -> None:
     latest_breathing = _latest_numeric(breathing, "breathing_rate_bpm")
     started_at = pd.to_datetime(int(session["started_at_ns"]), unit="ns", utc=True)
     ended_at_ns = session["ended_at_ns"]
-    ended_at = pd.to_datetime(int(ended_at_ns), unit="ns", utc=True) if pd.notna(ended_at_ns) else pd.Timestamp.utcnow(tz="UTC")
+    ended_at = (
+        pd.to_datetime(int(ended_at_ns), unit="ns", utc=True)
+        if pd.notna(ended_at_ns)
+        else pd.Timestamp.now(tz="UTC")
+    )
     duration_minutes = (ended_at - started_at).total_seconds() / 60.0
 
     top_row = st.columns(4)
@@ -390,7 +394,7 @@ def live_dashboard() -> None:
         st.subheader("Collector Events")
         st.dataframe(
             events[["time", "level", "event_type", "details"]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
