@@ -32,8 +32,27 @@ BREATHINGBAR_LOG_FILE="$LOG_DIR/breathingbar.log"
 
 DB_PATH="${POLAR_DASH_DB_PATH:-data/polar_dash.db}"
 DEVICE_PREFIX="${POLAR_H10_PREFIX:-Polar H10}"
+STARTUP_WAIT_SECONDS=1
+
+resolve_db_path() {
+  local db_path="$1"
+  local home_expanded="${db_path/#\~/$HOME}"
+
+  if [[ "$home_expanded" == /* ]]; then
+    printf "%s\n" "$home_expanded"
+    return 0
+  fi
+
+  printf "%s/%s\n" "$PROJECT_ROOT" "$home_expanded"
+}
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
+
+DB_PATH_ABS="$(resolve_db_path "$DB_PATH")"
+
+if [ ! -f "$DB_PATH_ABS" ]; then
+  touch "$DB_PATH_ABS"
+fi
 
 is_process_running() {
   local pid="$1"
@@ -65,18 +84,34 @@ start_services() {
     return 1
   fi
 
-  (
-    cd "$PROJECT_ROOT"
-    nohup uv run polar-dash cockpit --db "$DB_PATH" --prefix "$DEVICE_PREFIX" >>"$COCKPIT_LOG_FILE" 2>&1 &
-    echo "$!" >"$COCKPIT_PID_FILE"
+  cd "$PROJECT_ROOT"
 
-    nohup swift run --package-path macos/BreathingBar >>"$BREATHINGBAR_LOG_FILE" 2>&1 &
-    echo "$!" >"$BREATHINGBAR_PID_FILE"
-  )
+  PYTHONUNBUFFERED=1 POLAR_DASH_DB_PATH="$DB_PATH_ABS" nohup uv run polar-dash cockpit --db "$DB_PATH_ABS" --prefix "$DEVICE_PREFIX" >>"$COCKPIT_LOG_FILE" 2>&1 &
+  local cockpit_pid="$!"
+  echo "$cockpit_pid" >"$COCKPIT_PID_FILE"
+
+  sleep "$STARTUP_WAIT_SECONDS"
+  if ! is_process_running "$cockpit_pid"; then
+    echo "Cockpit failed to start. Last output:"
+    tail -n 80 "$COCKPIT_LOG_FILE"
+    return 1
+  fi
+
+  POLAR_DASH_DB="$DB_PATH_ABS" nohup swift run --package-path macos/BreathingBar >>"$BREATHINGBAR_LOG_FILE" 2>&1 &
+  local breathingbar_pid="$!"
+  echo "$breathingbar_pid" >"$BREATHINGBAR_PID_FILE"
+
+  sleep "$STARTUP_WAIT_SECONDS"
+  if ! is_process_running "$breathingbar_pid"; then
+    echo "BreathingBar failed to start. Last output:"
+    tail -n 80 "$BREATHINGBAR_LOG_FILE"
+    return 1
+  fi
 
   echo "Started Polar H10 stack."
-  echo "  - Cockpit: $(cat "$COCKPIT_PID_FILE")"
-  echo "  - BreathingBar: $(cat "$BREATHINGBAR_PID_FILE")"
+  echo "  - Cockpit: $cockpit_pid"
+  echo "  - BreathingBar: $breathingbar_pid"
+  echo "  - Logs: $COCKPIT_LOG_FILE  and  $BREATHINGBAR_LOG_FILE"
 }
 
 stop_services() {
