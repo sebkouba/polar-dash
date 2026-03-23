@@ -50,6 +50,11 @@ CANDIDATE_COLORS = {
     "rr_interval": "#6a4c93",
     "learned_fusion": "#2a9d8f",
 }
+SHORTCUT_HINTS = (
+    ("F", "Finished exhaling"),
+    ("G", "Finished inhaling"),
+    ("Esc", "Close cockpit"),
+)
 
 
 @dataclass(slots=True)
@@ -780,6 +785,24 @@ class BreathingCockpitApp:
             height=680,
         )
         self.graph.pack(fill="both", expand=True)
+
+        shortcuts_frame = ttk.LabelFrame(sidebar, text="Keyboard Shortcuts")
+        shortcuts_frame.pack(fill="x", pady=(0, 12))
+        ttk.Label(
+            shortcuts_frame,
+            text="F/G are active after you start a label session.",
+            foreground=MUTED_FG,
+        ).pack(anchor="w", padx=8, pady=(8, 6))
+        for key_name, description in SHORTCUT_HINTS:
+            row = ttk.Frame(shortcuts_frame)
+            row.pack(fill="x", padx=8, pady=2)
+            ttk.Label(
+                row,
+                text=key_name,
+                width=5,
+                font=("SF Pro Text", 11, "bold"),
+            ).pack(side="left")
+            ttk.Label(row, text=description, foreground=MUTED_FG).pack(side="left")
 
         recent_frame = ttk.LabelFrame(sidebar, text="Recent Labels")
         recent_frame.pack(fill="both", expand=True)
