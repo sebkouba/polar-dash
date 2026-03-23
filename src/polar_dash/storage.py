@@ -87,6 +87,31 @@ class Storage:
                 UNIQUE(session_id, estimated_at_ns, source)
             );
 
+            CREATE TABLE IF NOT EXISTS annotation_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at_ns INTEGER NOT NULL,
+                ended_at_ns INTEGER,
+                name TEXT NOT NULL,
+                protocol_name TEXT NOT NULL,
+                linked_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+                notes_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS breathing_phase_labels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                annotation_session_id INTEGER NOT NULL REFERENCES annotation_sessions(id) ON DELETE CASCADE,
+                sensor_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+                recorded_at_ns INTEGER NOT NULL,
+                phase_code TEXT NOT NULL,
+                key_name TEXT NOT NULL,
+                breathing_estimate_bpm REAL,
+                breathing_estimate_source TEXT,
+                breathing_estimate_time_ns INTEGER,
+                estimate_age_ms REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_started_at
                 ON sessions(started_at_ns DESC);
             CREATE INDEX IF NOT EXISTS idx_hr_frames_session_time
@@ -99,6 +124,12 @@ class Storage:
                 ON collector_events(session_id, recorded_at_ns);
             CREATE INDEX IF NOT EXISTS idx_breathing_estimates_session_time
                 ON breathing_estimates(session_id, estimated_at_ns);
+            CREATE INDEX IF NOT EXISTS idx_annotation_sessions_started_at
+                ON annotation_sessions(started_at_ns DESC);
+            CREATE INDEX IF NOT EXISTS idx_breathing_phase_labels_session_time
+                ON breathing_phase_labels(annotation_session_id, recorded_at_ns);
+            CREATE INDEX IF NOT EXISTS idx_breathing_phase_labels_sensor_time
+                ON breathing_phase_labels(sensor_session_id, recorded_at_ns);
             """
         )
         self.connection.commit()
@@ -278,3 +309,170 @@ class Storage:
             ),
         )
         self.connection.commit()
+
+    def start_annotation_session(
+        self,
+        name: str,
+        *,
+        protocol_name: str,
+        linked_session_id: int | None = None,
+        notes: dict[str, Any] | None = None,
+    ) -> int:
+        cursor = self.connection.execute(
+            """
+            INSERT INTO annotation_sessions (
+                started_at_ns,
+                name,
+                protocol_name,
+                linked_session_id,
+                notes_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                time.time_ns(),
+                name,
+                protocol_name,
+                linked_session_id,
+                json.dumps(notes or {}),
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def close_annotation_session(self, annotation_session_id: int) -> None:
+        self.connection.execute(
+            """
+            UPDATE annotation_sessions
+            SET ended_at_ns = ?
+            WHERE id = ?
+            """,
+            (time.time_ns(), annotation_session_id),
+        )
+        self.connection.commit()
+
+    def get_annotation_session(self, annotation_session_id: int) -> sqlite3.Row | None:
+        return self.connection.execute(
+            """
+            SELECT *
+            FROM annotation_sessions
+            WHERE id = ?
+            """,
+            (annotation_session_id,),
+        ).fetchone()
+
+    def find_sensor_session_at(self, recorded_at_ns: int | None = None) -> sqlite3.Row | None:
+        target_ns = recorded_at_ns or time.time_ns()
+        row = self.connection.execute(
+            """
+            SELECT *
+            FROM sessions
+            WHERE started_at_ns <= ?
+              AND (ended_at_ns IS NULL OR ended_at_ns >= ?)
+            ORDER BY started_at_ns DESC
+            LIMIT 1
+            """,
+            (target_ns, target_ns),
+        ).fetchone()
+        if row is not None:
+            return row
+        return self.connection.execute(
+            """
+            SELECT *
+            FROM sessions
+            WHERE started_at_ns <= ?
+            ORDER BY started_at_ns DESC
+            LIMIT 1
+            """,
+            (target_ns,),
+        ).fetchone()
+
+    def find_nearest_breathing_estimate(
+        self,
+        recorded_at_ns: int,
+        *,
+        sensor_session_id: int | None = None,
+        max_gap_ns: int = 30_000_000_000,
+    ) -> sqlite3.Row | None:
+        session_filter = ""
+        params: list[Any] = [recorded_at_ns, recorded_at_ns, max_gap_ns]
+        if sensor_session_id is not None:
+            session_filter = "AND session_id = ?"
+            params.append(sensor_session_id)
+
+        row = self.connection.execute(
+            f"""
+            SELECT *,
+                   ABS(estimated_at_ns - ?) AS absolute_gap_ns
+            FROM breathing_estimates
+            WHERE ABS(estimated_at_ns - ?) <= ?
+              {session_filter}
+            ORDER BY absolute_gap_ns ASC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        return row
+
+    def insert_breathing_phase_label(
+        self,
+        annotation_session_id: int,
+        *,
+        recorded_at_ns: int,
+        phase_code: str,
+        key_name: str,
+        sensor_session_id: int | None,
+        breathing_estimate_bpm: float | None,
+        breathing_estimate_source: str | None,
+        breathing_estimate_time_ns: int | None,
+        estimate_age_ms: float | None,
+    ) -> int:
+        cursor = self.connection.execute(
+            """
+            INSERT INTO breathing_phase_labels (
+                annotation_session_id,
+                sensor_session_id,
+                recorded_at_ns,
+                phase_code,
+                key_name,
+                breathing_estimate_bpm,
+                breathing_estimate_source,
+                breathing_estimate_time_ns,
+                estimate_age_ms
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                annotation_session_id,
+                sensor_session_id,
+                recorded_at_ns,
+                phase_code,
+                key_name,
+                breathing_estimate_bpm,
+                breathing_estimate_source,
+                breathing_estimate_time_ns,
+                estimate_age_ms,
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def delete_last_breathing_phase_label(self, annotation_session_id: int) -> bool:
+        row = self.connection.execute(
+            """
+            SELECT id
+            FROM breathing_phase_labels
+            WHERE annotation_session_id = ?
+            ORDER BY recorded_at_ns DESC
+            LIMIT 1
+            """,
+            (annotation_session_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        self.connection.execute(
+            "DELETE FROM breathing_phase_labels WHERE id = ?",
+            (int(row["id"]),),
+        )
+        self.connection.commit()
+        return True

@@ -15,6 +15,7 @@ from polar_dash.collector import (
     run_collection,
     scan_for_devices,
 )
+from polar_dash.labeler import run_labeler
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -109,6 +110,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default="data/polar_dash.db",
         help="SQLite file containing stored raw data.",
     )
+
+    annotate_parser = subparsers.add_parser(
+        "annotate-breathing",
+        help="Open a small keyboard-driven breathing phase labeler.",
+    )
+    annotate_parser.add_argument(
+        "--db",
+        default="data/polar_dash.db",
+        help="SQLite file containing the live sensor stream.",
+    )
+    annotate_parser.add_argument(
+        "--name",
+        default=None,
+        help="Optional name for the annotation session.",
+    )
     return parser
 
 
@@ -164,6 +180,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "backfill-breathing":
             inserted = backfill_breathing_estimates(args.db)
             print(f"Inserted {inserted} breathing estimates.")
+            return 0
+
+        if args.command == "annotate-breathing":
+            run_labeler(args.db, name=args.name)
             return 0
     except KeyboardInterrupt:
         print("Interrupted.")
