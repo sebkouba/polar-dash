@@ -15,6 +15,11 @@ from polar_dash.collector import (
     run_collection,
     scan_for_devices,
 )
+from polar_dash.evaluate import (
+    evaluate_breathing_labels,
+    format_evaluation_report,
+    write_evaluation_json,
+)
 from polar_dash.labeler_v2 import run_labeler
 
 
@@ -125,6 +130,41 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional name for the annotation session.",
     )
+
+    evaluate_parser = subparsers.add_parser(
+        "evaluate-breathing",
+        help="Score persisted breathing estimates against saved breathing phase labels.",
+    )
+    evaluate_parser.add_argument(
+        "--db",
+        default="data/polar_dash.db",
+        help="SQLite file containing stored raw data and labels.",
+    )
+    evaluate_parser.add_argument(
+        "--annotation-session-id",
+        dest="annotation_session_ids",
+        type=int,
+        action="append",
+        default=None,
+        help="Evaluate only the specified annotation session. Repeat to include multiple sessions.",
+    )
+    evaluate_parser.add_argument(
+        "--min-cycle-seconds",
+        type=float,
+        default=1.5,
+        help="Ignore repeated phase labels that imply a shorter breathing cycle than this.",
+    )
+    evaluate_parser.add_argument(
+        "--max-cycle-seconds",
+        type=float,
+        default=15.0,
+        help="Ignore repeated phase labels that imply a longer breathing cycle than this.",
+    )
+    evaluate_parser.add_argument(
+        "--json-out",
+        default=None,
+        help="Optional path to write point-level evaluation data as JSON.",
+    )
     return parser
 
 
@@ -184,6 +224,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "annotate-breathing":
             run_labeler(args.db, name=args.name)
+            return 0
+
+        if args.command == "evaluate-breathing":
+            evaluations = evaluate_breathing_labels(
+                args.db,
+                annotation_session_ids=args.annotation_session_ids,
+                min_cycle_seconds=args.min_cycle_seconds,
+                max_cycle_seconds=args.max_cycle_seconds,
+            )
+            print(format_evaluation_report(evaluations))
+            if args.json_out is not None:
+                write_evaluation_json(args.json_out, evaluations)
+                print(f"Wrote JSON report to {Path(args.json_out).expanduser().resolve()}")
             return 0
     except KeyboardInterrupt:
         print("Interrupted.")
