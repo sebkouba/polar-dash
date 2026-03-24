@@ -32,7 +32,7 @@ Most consumer heart-rate tools are good at heart rate and rough HRV, but not at 
 This repo is the result of a short build focused on that exact gap:
 
 - collect live Polar H10 BLE data,
-- keep a display-only breathing/HR/HRV monitor always visible,
+- keep a breathing/HR/HRV monitor with historical trend graphs always visible,
 - estimate breathing from multiple imperfect signals,
 - surface the result in a menu bar readout while keeping the Python cockpit around for optional calibration and offline analysis work.
 
@@ -44,7 +44,7 @@ This repo is the result of a short build focused on that exact gap:
 - `src/polar_dash/dashboard.py`: Streamlit dashboard for inspecting persisted sessions.
 - `src/polar_dash/labeler_v2.py`: keyboard-driven breathing-phase labeling workflow.
 - `src/polar_dash/evaluate.py`: scoring utilities for estimates versus saved labels.
-- `macos/BreathingBar`: Swift runtime app that owns BLE collection, live estimation, bundled calibration loading, and the menu bar UI.
+- `macos/BreathingBar`: Swift runtime app that owns BLE collection, live estimation, bundled calibration loading, derived graph-history storage, and the menu bar UI.
 
 ## Quick Start
 
@@ -59,7 +59,7 @@ Launch the Swift runtime app:
 swift run --package-path macos/BreathingBar
 ```
 
-The app scans for the Polar H10, connects directly over Bluetooth, loads the bundled calibration, and updates the menu bar without creating or reading a runtime SQLite database.
+The app scans for the Polar H10, connects directly over Bluetooth, loads the bundled calibration, stores only derived breathing/heart-rate/HRV points for the in-app history graph, and updates the menu bar without persisting raw sensor frames.
 
 If you want the optional Python tooling for calibration, evaluation, or older inspection views:
 
