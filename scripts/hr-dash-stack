@@ -25,22 +25,13 @@ PROJECT_ROOT="${HR_DASH_ROOT:-$(resolve_project_root "${BASH_SOURCE[0]}")}"
 DATA_DIR="$PROJECT_ROOT/.hr_stack"
 LOG_DIR="$DATA_DIR/logs"
 PID_DIR="$DATA_DIR/pids"
-COCKPIT_PID_FILE="$PID_DIR/cockpit.pid"
 BREATHINGBAR_PID_FILE="$PID_DIR/breathingbar.pid"
-COCKPIT_LOG_FILE="$LOG_DIR/cockpit.log"
 BREATHINGBAR_LOG_FILE="$LOG_DIR/breathingbar.log"
 
 DB_PATH="${POLAR_DASH_DB_PATH:-data/polar_dash.db}"
-DEVICE_PREFIX="${POLAR_H10_PREFIX:-Polar H10}"
 STARTUP_WAIT_SECONDS=1
-COCKPIT_PACKAGE_PATH="$PROJECT_ROOT/macos/BreathingBar"
-UV_BIN="$(command -v uv 2>/dev/null || true)"
+PACKAGE_PATH="$PROJECT_ROOT/macos/BreathingBar"
 SWIFT_BIN="$(command -v swift 2>/dev/null || true)"
-
-if [ -z "$UV_BIN" ]; then
-  echo "uv is not installed or not on PATH."
-  exit 1
-fi
 
 if [ -z "$SWIFT_BIN" ]; then
   echo "swift is not installed or not on PATH."
@@ -59,65 +50,7 @@ resolve_db_path() {
   printf "%s/%s\n" "$PROJECT_ROOT" "$home_expanded"
 }
 
-resolve_tcl_paths() {
-  local uv_python
-  local uv_python_prefix
-
-  uv_python="$(cd "$PROJECT_ROOT" && "$UV_BIN" run python -c 'import sys; print(sys.executable)')"
-  if command -v readlink >/dev/null 2>&1; then
-    uv_python="$(readlink -f "$uv_python" 2>/dev/null || echo "$uv_python")"
-  fi
-  uv_python_prefix="$(cd "$(dirname "$uv_python")/.." && pwd)"
-
-  if [ -d "$uv_python_prefix/lib/tcl9.0" ]; then
-    echo "$uv_python_prefix/lib/tcl9.0"
-  elif [ -d "$uv_python_prefix/lib/tcl8.6" ]; then
-    echo "$uv_python_prefix/lib/tcl8.6"
-  elif [ -d "$uv_python_prefix/lib/tcl" ]; then
-    echo "$uv_python_prefix/lib/tcl"
-  else
-    echo ""
-  fi
-
-  if [ -d "$uv_python_prefix/lib/tk9.0" ]; then
-    echo "$uv_python_prefix/lib/tk9.0"
-  elif [ -d "$uv_python_prefix/lib/tk8.6" ]; then
-    echo "$uv_python_prefix/lib/tk8.6"
-  else
-    echo ""
-  fi
-}
-
-TCL_LIBRARY_PATH=""
-TK_LIBRARY_PATH=""
-while IFS= read -r line; do
-  if [ -z "$TCL_LIBRARY_PATH" ]; then
-    TCL_LIBRARY_PATH="$line"
-  elif [ -z "$TK_LIBRARY_PATH" ]; then
-    TK_LIBRARY_PATH="$line"
-  fi
-done < <(resolve_tcl_paths)
-
-if [ -n "${POLAR_DASH_TCL_LIBRARY:-}" ]; then
-  TCL_LIBRARY_PATH="$POLAR_DASH_TCL_LIBRARY"
-fi
-
-if [ -n "${POLAR_DASH_TK_LIBRARY:-}" ]; then
-  TK_LIBRARY_PATH="$POLAR_DASH_TK_LIBRARY"
-fi
-
-if [ -n "$TCL_LIBRARY_PATH" ] && [ ! -d "$TCL_LIBRARY_PATH" ]; then
-  echo "Invalid TCL_LIBRARY: $TCL_LIBRARY_PATH"
-  exit 1
-fi
-
-if [ -n "$TK_LIBRARY_PATH" ] && [ ! -d "$TK_LIBRARY_PATH" ]; then
-  echo "Invalid TK_LIBRARY: $TK_LIBRARY_PATH"
-  exit 1
-fi
-
 mkdir -p "$LOG_DIR" "$PID_DIR"
-
 DB_PATH_ABS="$(resolve_db_path "$DB_PATH")"
 
 is_process_running() {
@@ -158,25 +91,6 @@ terminate_pid() {
   return 0
 }
 
-terminate_matching_processes() {
-  local label="$1"
-  local pattern="$2"
-  local pid
-  local failed=0
-
-  while read -r pid; do
-    [ -z "$pid" ] && continue
-    if ! terminate_pid "$pid" "$label"; then
-      failed=1
-    fi
-  done < <(pgrep -f "$pattern" || true)
-
-  if [ "$failed" -eq 0 ]; then
-    return 0
-  fi
-  return 1
-}
-
 cleanup_stale_pid_file() {
   local pid_file="$1"
   local pid
@@ -192,41 +106,15 @@ cleanup_stale_pid_file() {
 }
 
 start_services() {
-  if [ -f "$COCKPIT_PID_FILE" ] || [ -f "$BREATHINGBAR_PID_FILE" ]; then
-    cleanup_stale_pid_file "$COCKPIT_PID_FILE"
-    cleanup_stale_pid_file "$BREATHINGBAR_PID_FILE"
-  fi
+  cleanup_stale_pid_file "$BREATHINGBAR_PID_FILE"
 
-  if [ -f "$COCKPIT_PID_FILE" ] || [ -f "$BREATHINGBAR_PID_FILE" ]; then
-    echo "Services are already running. Use hroff first."
+  if [ -f "$BREATHINGBAR_PID_FILE" ]; then
+    echo "BreathingBar is already running. Use hroff first."
     return 1
   fi
 
   cd "$PROJECT_ROOT"
-
-  local cockpit_env=(
-    PYTHONUNBUFFERED=1
-    POLAR_DASH_DB_PATH="$DB_PATH_ABS"
-  )
-  if [ -n "$TCL_LIBRARY_PATH" ]; then
-    cockpit_env+=(TCL_LIBRARY="$TCL_LIBRARY_PATH")
-  fi
-  if [ -n "$TK_LIBRARY_PATH" ]; then
-    cockpit_env+=(TK_LIBRARY="$TK_LIBRARY_PATH")
-  fi
-
-  env "${cockpit_env[@]}" nohup "$UV_BIN" run polar-dash cockpit --db "$DB_PATH_ABS" --prefix "$DEVICE_PREFIX" >>"$COCKPIT_LOG_FILE" 2>&1 &
-  local cockpit_pid="$!"
-  echo "$cockpit_pid" >"$COCKPIT_PID_FILE"
-
-  sleep "$STARTUP_WAIT_SECONDS"
-  if ! is_process_running "$cockpit_pid"; then
-    echo "Cockpit failed to start. Last output:"
-    tail -n 80 "$COCKPIT_LOG_FILE"
-    return 1
-  fi
-
-  POLAR_DASH_DB="$DB_PATH_ABS" nohup "$SWIFT_BIN" run --package-path "$COCKPIT_PACKAGE_PATH" >>"$BREATHINGBAR_LOG_FILE" 2>&1 &
+  POLAR_DASH_DB="$DB_PATH_ABS" nohup "$SWIFT_BIN" run --package-path "$PACKAGE_PATH" >>"$BREATHINGBAR_LOG_FILE" 2>&1 &
   local breathingbar_pid="$!"
   echo "$breathingbar_pid" >"$BREATHINGBAR_PID_FILE"
 
@@ -237,52 +125,30 @@ start_services() {
     return 1
   fi
 
-  echo "Started Polar H10 stack."
-  echo "  - Cockpit: $cockpit_pid"
+  echo "Started BreathingBar runtime."
   echo "  - BreathingBar: $breathingbar_pid"
-  echo "  - Logs: $COCKPIT_LOG_FILE  and  $BREATHINGBAR_LOG_FILE"
+  echo "  - Log: $BREATHINGBAR_LOG_FILE"
 }
 
 stop_services() {
-  cleanup_stale_pid_file "$COCKPIT_PID_FILE"
   cleanup_stale_pid_file "$BREATHINGBAR_PID_FILE"
 
-  if [ ! -f "$COCKPIT_PID_FILE" ] && [ ! -f "$BREATHINGBAR_PID_FILE" ]; then
-    echo "No running services found."
+  if [ ! -f "$BREATHINGBAR_PID_FILE" ]; then
+    echo "BreathingBar is not running."
     return 0
   fi
 
-  local failed=0
   local pid
-
-  for pid_file in "$COCKPIT_PID_FILE" "$BREATHINGBAR_PID_FILE"; do
-    if [ -f "$pid_file" ]; then
-      pid="$(cat "$pid_file")"
-      if is_process_running "$pid"; then
-        if ! terminate_pid "$pid" "service"; then
-          echo "Failed to stop pid $pid."
-          failed=1
-        fi
-      fi
-      rm -f "$pid_file"
-    fi
-  done
-
-  # SwiftPM process trees can occasionally re-exec and change PIDs. Fall back
-  # to matching command lines to avoid leaving menu bar app behind.
-  if ! terminate_matching_processes "BreathingBar" "swift run --package-path macos/BreathingBar"; then
-    failed=1
+  pid="$(cat "$BREATHINGBAR_PID_FILE")"
+  if is_process_running "$pid"; then
+    terminate_pid "$pid" "BreathingBar"
   fi
-  if ! terminate_matching_processes "BreathingBar" "macos/BreathingBar/.build/debug/BreathingBar"; then
-    failed=1
-  fi
+  rm -f "$BREATHINGBAR_PID_FILE"
 
-  if [ "$failed" -eq 1 ]; then
-    echo "Some processes did not stop cleanly."
-    return 1
-  fi
+  pkill -f "swift run --package-path .*macos/BreathingBar" >/dev/null 2>&1 || true
+  pkill -f "macos/BreathingBar/.build/.*/BreathingBar" >/dev/null 2>&1 || true
 
-  echo "Stopped Polar H10 stack."
+  echo "Stopped BreathingBar runtime."
 }
 
 case "$(basename "$0")" in

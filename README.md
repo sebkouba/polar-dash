@@ -23,7 +23,7 @@ The menu bar companion keeps the latest breathing rate, heart rate, and HRV visi
 
 ![Breathing cockpit](docs/images/cockpit-demo.png)
 
-The cockpit is the heavier live view: raw ECG, accelerometer traces, breathing candidates, fusion output, and a visible shortcut panel for quick labeling/calibration sessions.
+The Python cockpit remains available for labeling and recalibration work, but the normal live runtime now lives directly in the Swift menu bar app.
 
 ## Why This Exists
 
@@ -34,49 +34,39 @@ This repo is the result of a short build focused on that exact gap:
 - collect live Polar H10 BLE data,
 - persist enough raw signal data to revisit the session later,
 - estimate breathing from multiple imperfect signals,
-- surface the result both in a full cockpit and a tiny menu bar readout.
+- surface the result in a menu bar readout while keeping the Python cockpit around for optional calibration work.
 
 ## What's In The Repo
 
-- `src/polar_dash/collector.py`: BLE collection from the Polar H10 into SQLite.
-- `src/polar_dash/breathing.py`: ACC, ECG, RR, and fusion-based breathing estimation.
-- `src/polar_dash/cockpit.py`: native Tk live cockpit for collection, visualization, and label-driven recalibration.
+- `src/polar_dash/collector.py`: older Python collector path plus offline backfill helpers.
+- `src/polar_dash/breathing.py`: reference Python ACC, ECG, RR, and fusion-based breathing estimation for tooling/calibration.
+- `src/polar_dash/cockpit.py`: native Tk cockpit for visualization, labeling, and recalibration sessions.
 - `src/polar_dash/dashboard.py`: Streamlit dashboard for inspecting persisted sessions.
 - `src/polar_dash/labeler_v2.py`: keyboard-driven breathing-phase labeling workflow.
 - `src/polar_dash/evaluate.py`: scoring utilities for estimates versus saved labels.
-- `macos/BreathingBar`: Swift menu bar companion that reads the latest snapshot from SQLite.
+- `macos/BreathingBar`: Swift runtime app that owns BLE collection, live estimation, persistence, and the menu bar UI.
 
 ## Quick Start
 
 Requirements:
 
 - macOS
-- Python 3.13+
-- `uv`
 - Swift toolchain / Xcode command line tools
 
-Install dependencies:
-
-```bash
-uv sync
-```
-
-Scan for your strap:
-
-```bash
-uv run polar-dash scan --timeout 4
-```
-
-Start the live cockpit collector:
-
-```bash
-uv run polar-dash cockpit
-```
-
-In another terminal, launch the menu bar companion against the same database:
+Launch the Swift runtime app:
 
 ```bash
 POLAR_DASH_DB=data/polar_dash.db swift run --package-path macos/BreathingBar
+```
+
+The app scans for the Polar H10, connects directly over Bluetooth, persists runtime data into SQLite, applies the latest saved calibration if one exists, and updates the menu bar without the Python cockpit running.
+
+If you want the optional Python tooling for calibration, evaluation, or older inspection views:
+
+```bash
+uv sync
+uv run polar-dash scan --timeout 4
+uv run polar-dash cockpit --db data/polar_dash.db
 ```
 
 If you prefer the older browser-based view:
@@ -90,21 +80,21 @@ Then open `http://127.0.0.1:8501`.
 ## Useful Commands
 
 ```bash
+swift build --package-path macos/BreathingBar
+POLAR_DASH_DB=data/polar_dash.db swift run --package-path macos/BreathingBar
+./scripts/install-hr-stack.sh
 uv run polar-dash scan --prefix "Polar H10"
-uv run polar-dash collect --db data/polar_dash.db
 uv run polar-dash cockpit --db data/polar_dash.db
 uv run polar-dash annotate-breathing --db data/polar_dash.db
 uv run polar-dash evaluate-breathing --db data/polar_dash.db
 uv run polar-dash dashboard --db data/polar_dash.db --port 8501
-swift build --package-path macos/BreathingBar
-./scripts/install-hr-stack.sh
 ```
 
-The `install-hr-stack.sh` helper installs `hron` and `hroff`, which wrap the cockpit and the menu bar app for quick local start/stop cycles.
+The `install-hr-stack.sh` helper installs `hron` and `hroff`, which wrap the Swift runtime app for quick local start/stop cycles.
 
 ## Keyboard Shortcuts
 
-The cockpit shows the shortcuts in the sidebar, and the label keys are active once you start a label session:
+The Python cockpit shows the shortcuts in the sidebar, and the label keys are active once you start a label session:
 
 - `F`: mark "finished exhaling"
 - `G`: mark "finished inhaling"
@@ -112,7 +102,7 @@ The cockpit shows the shortcuts in the sidebar, and the label keys are active on
 
 ## How Breathing Is Estimated
 
-The estimator does not measure respiration directly. It builds a plausible rate estimate by combining:
+The live estimator does not measure respiration directly. It builds a plausible rate estimate by combining:
 
 - chest accelerometer motion,
 - ECG-derived respiration features,
@@ -143,4 +133,4 @@ swift build --package-path macos/BreathingBar
 
 - Breathing rate is approximate and sensitive to movement, strap placement, and signal quality.
 - The menu bar app is macOS-only.
-- The cockpit is intentionally utilitarian; this was built to be useful quickly, not polished into a product.
+- The optional Python cockpit is intentionally utilitarian; this was built to be useful quickly, not polished into a product.
