@@ -369,7 +369,8 @@ private struct MenuContentView: View {
                                 if showsHeartRate, let heartRate = sample.heartRate {
                                     LineMark(
                                         x: .value("Time", sample.sampledAt),
-                                        y: .value("Heart Rate", heartRate)
+                                        y: .value("Heart Rate", heartRate),
+                                        series: .value("Metric", HistoryMetric.heartRate.title)
                                     )
                                     .foregroundStyle(HistoryMetric.heartRate.color)
                                     .interpolationMethod(.linear)
@@ -377,7 +378,8 @@ private struct MenuContentView: View {
                                 if showsHeartRateVariability, let hrvRMSSD = sample.hrvRMSSD {
                                     LineMark(
                                         x: .value("Time", sample.sampledAt),
-                                        y: .value("HRV (RMSSD)", hrvRMSSD)
+                                        y: .value("HRV (RMSSD)", hrvRMSSD),
+                                        series: .value("Metric", HistoryMetric.heartRateVariability.title)
                                     )
                                     .foregroundStyle(HistoryMetric.heartRateVariability.color)
                                     .interpolationMethod(.linear)
