@@ -12,14 +12,14 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "BreathingBarCore"
+            name: "BreathingBarCore",
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         ),
         .executableTarget(
             name: "BreathingBar",
             dependencies: ["BreathingBarCore"],
-            linkerSettings: [
-                .linkedLibrary("sqlite3")
-            ]
         ),
         .testTarget(
             name: "BreathingBarTests",
