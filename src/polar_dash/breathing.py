@@ -20,7 +20,13 @@ DEFAULT_SINGLE_SOURCE_SMOOTHING_ALPHA = 0.60
 DEFAULT_CALIBRATION_EPSILON = 0.25
 DEFAULT_MIN_CALIBRATION_POINTS = 3
 DEFAULT_REPO_CALIBRATION_PATH = (
-    Path(__file__).resolve().parents[2] / "defaults" / "default_breathing_calibration.json"
+    Path(__file__).resolve().parents[2]
+    / "macos"
+    / "BreathingBar"
+    / "Sources"
+    / "BreathingBarCore"
+    / "Resources"
+    / "default_breathing_calibration.json"
 )
 
 

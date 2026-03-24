@@ -32,9 +32,9 @@ Most consumer heart-rate tools are good at heart rate and rough HRV, but not at 
 This repo is the result of a short build focused on that exact gap:
 
 - collect live Polar H10 BLE data,
-- persist enough raw signal data to revisit the session later,
+- keep a display-only breathing/HR/HRV monitor always visible,
 - estimate breathing from multiple imperfect signals,
-- surface the result in a menu bar readout while keeping the Python cockpit around for optional calibration work.
+- surface the result in a menu bar readout while keeping the Python cockpit around for optional calibration and offline analysis work.
 
 ## What's In The Repo
 
@@ -44,7 +44,7 @@ This repo is the result of a short build focused on that exact gap:
 - `src/polar_dash/dashboard.py`: Streamlit dashboard for inspecting persisted sessions.
 - `src/polar_dash/labeler_v2.py`: keyboard-driven breathing-phase labeling workflow.
 - `src/polar_dash/evaluate.py`: scoring utilities for estimates versus saved labels.
-- `macos/BreathingBar`: Swift runtime app that owns BLE collection, live estimation, persistence, and the menu bar UI.
+- `macos/BreathingBar`: Swift runtime app that owns BLE collection, live estimation, bundled calibration loading, and the menu bar UI.
 
 ## Quick Start
 
@@ -56,10 +56,10 @@ Requirements:
 Launch the Swift runtime app:
 
 ```bash
-POLAR_DASH_DB=data/polar_dash.db swift run --package-path macos/BreathingBar
+swift run --package-path macos/BreathingBar
 ```
 
-The app scans for the Polar H10, connects directly over Bluetooth, persists runtime data into SQLite, applies the latest saved calibration if one exists, otherwise falls back to the checked-in default calibration, and updates the menu bar without the Python cockpit running.
+The app scans for the Polar H10, connects directly over Bluetooth, loads the bundled calibration, and updates the menu bar without creating or reading a runtime SQLite database.
 
 If you want the optional Python tooling for calibration, evaluation, or older inspection views:
 
@@ -81,7 +81,7 @@ Then open `http://127.0.0.1:8501`.
 
 ```bash
 swift build --package-path macos/BreathingBar
-POLAR_DASH_DB=data/polar_dash.db swift run --package-path macos/BreathingBar
+swift run --package-path macos/BreathingBar
 ./scripts/install-hr-stack.sh
 uv run polar-dash scan --prefix "Polar H10"
 uv run polar-dash cockpit --db data/polar_dash.db
