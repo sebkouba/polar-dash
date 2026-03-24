@@ -41,7 +41,10 @@ final class BreathingBarModel: ObservableObject {
 
         if let calibrationRecord = try? store?.latestCalibrationRecord() {
             engine.setCalibration(calibrationRecord.calibration)
-            calibrationDescription = "Calibration: v\(calibrationRecord.id) (\(calibrationRecord.protocolName))"
+            calibrationDescription = Self.describeCalibration(calibrationRecord.calibration)
+        } else if let defaultCalibration = DefaultCalibrationStore.loadFromRepo() {
+            engine.setCalibration(defaultCalibration)
+            calibrationDescription = Self.describeCalibration(defaultCalibration)
         }
 
         configureCollector()
@@ -73,13 +76,19 @@ final class BreathingBarModel: ObservableObject {
 
     func reloadCalibration() {
         guard let calibrationRecord = try? store?.latestCalibrationRecord() else {
-            engine.setCalibration(.default())
-            calibrationDescription = "Calibration: default fusion"
-            runtimeStatus = "Using default fusion calibration."
+            if let defaultCalibration = DefaultCalibrationStore.loadFromRepo() {
+                engine.setCalibration(defaultCalibration)
+                calibrationDescription = Self.describeCalibration(defaultCalibration)
+                runtimeStatus = "Using repo default fusion calibration."
+            } else {
+                engine.setCalibration(.default())
+                calibrationDescription = "Calibration: default fusion"
+                runtimeStatus = "Using default fusion calibration."
+            }
             return
         }
         engine.setCalibration(calibrationRecord.calibration)
-        calibrationDescription = "Calibration: v\(calibrationRecord.id) (\(calibrationRecord.protocolName))"
+        calibrationDescription = Self.describeCalibration(calibrationRecord.calibration)
         runtimeStatus = "Reloaded calibration v\(calibrationRecord.id)."
     }
 
@@ -250,6 +259,16 @@ final class BreathingBarModel: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(450))
             }
         }
+    }
+
+    private static func describeCalibration(_ calibration: FusionCalibration) -> String {
+        if let version = calibration.version {
+            return "Calibration: v\(version) (\(calibration.protocolName))"
+        }
+        if calibration.protocolName != "default" {
+            return "Calibration: repo default (\(calibration.protocolName))"
+        }
+        return "Calibration: default fusion"
     }
 
     private static func resolveDatabaseURL() -> URL {

@@ -25,6 +25,7 @@ from polar_dash.breathing import (
     LiveBreathingEngine,
     compute_rmssd_series,
     fit_fusion_calibration,
+    load_default_fusion_calibration,
     rebuild_learned_fusion_history,
 )
 from polar_dash.storage import DEFAULT_DB_PATH, Storage
@@ -308,7 +309,7 @@ class CockpitController:
             calibration.version = int(latest_calibration["id"])
             self.engine.set_calibration(calibration)
         else:
-            self.engine.set_calibration(FusionCalibration.default())
+            self.engine.set_calibration(load_default_fusion_calibration())
 
     def close(self) -> None:
         self.stop_collection()
@@ -484,7 +485,7 @@ class CockpitController:
             self.status_message = f"Saved label session {annotation_session_id}."
 
     def reset_calibration(self) -> None:
-        calibration = FusionCalibration.default()
+        calibration = load_default_fusion_calibration()
         self.engine.set_calibration(calibration)
         self.candidate_history_by_name["learned_fusion"].clear()
         rebuilt = rebuild_learned_fusion_history(self._base_candidate_history(), calibration)
@@ -493,7 +494,10 @@ class CockpitController:
             self.current_estimates["learned_fusion"] = rebuilt[-1]
         else:
             self.current_estimates.pop("learned_fusion", None)
-        self.status_message = "Calibration reset to default fusion."
+        if calibration.protocol_name != "default":
+            self.status_message = f"Calibration reset to repo default ({calibration.protocol_name})."
+        else:
+            self.status_message = "Calibration reset to default fusion."
 
     def handle_keypress(self, key_name: str, *, now_ns: int | None = None) -> None:
         key = key_name.lower()
@@ -530,11 +534,12 @@ class CockpitController:
             for name, history in self.candidate_history_by_name.items()
         }
         calibration = self.engine.calibration
-        calibration_text = (
-            f"Calibration: v{calibration.version} ({calibration.protocol_name})"
-            if calibration.version is not None
-            else "Calibration: default fusion"
-        )
+        if calibration.version is not None:
+            calibration_text = f"Calibration: v{calibration.version} ({calibration.protocol_name})"
+        elif calibration.protocol_name != "default":
+            calibration_text = f"Calibration: repo default ({calibration.protocol_name})"
+        else:
+            calibration_text = "Calibration: default fusion"
         session_text = (
             f"Session {self.current_session_id} on {self.current_device_name or 'unknown'}"
             if self.current_session_id is not None

@@ -11,6 +11,7 @@ from polar_dash.breathing import (
     FusionCalibration,
     LiveBreathingEngine,
     fit_fusion_calibration,
+    load_default_fusion_calibration,
 )
 from polar_dash.storage import Storage
 
@@ -94,6 +95,16 @@ class LiveBreathingEngineTests(unittest.TestCase):
 
 
 class StorageCalibrationTests(unittest.TestCase):
+    def test_repo_default_calibration_loads_seeded_values(self) -> None:
+        calibration = load_default_fusion_calibration()
+
+        self.assertEqual(calibration.protocol_name, "breathing_turnaround_fg_v1")
+        self.assertAlmostEqual(calibration.bias_by_candidate["acc_pca"], 3.911209097905669)
+        self.assertAlmostEqual(
+            calibration.reliability_by_candidate["rr_interval"],
+            0.41232667845099424,
+        )
+
     def test_storage_persists_candidate_estimates_and_calibration(self) -> None:
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)

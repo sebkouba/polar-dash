@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import math
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
@@ -17,6 +19,9 @@ DEFAULT_FUSION_SMOOTHING_ALPHA = 0.75
 DEFAULT_SINGLE_SOURCE_SMOOTHING_ALPHA = 0.60
 DEFAULT_CALIBRATION_EPSILON = 0.25
 DEFAULT_MIN_CALIBRATION_POINTS = 3
+DEFAULT_REPO_CALIBRATION_PATH = (
+    Path(__file__).resolve().parents[2] / "defaults" / "default_breathing_calibration.json"
+)
 
 
 @dataclass(slots=True)
@@ -96,6 +101,16 @@ class FusionCalibration:
             trained_point_count=int(payload.get("trained_point_count", 0)),
             trained_at_ns=payload.get("trained_at_ns"),
         )
+
+
+def load_default_fusion_calibration(
+    calibration_path: Path | str = DEFAULT_REPO_CALIBRATION_PATH,
+) -> FusionCalibration:
+    try:
+        payload = json.loads(Path(calibration_path).read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return FusionCalibration.default()
+    return FusionCalibration.from_dict(payload)
 
 
 def build_reference_intervals_from_labels(

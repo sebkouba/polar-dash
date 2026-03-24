@@ -59,7 +59,7 @@ Launch the Swift runtime app:
 POLAR_DASH_DB=data/polar_dash.db swift run --package-path macos/BreathingBar
 ```
 
-The app scans for the Polar H10, connects directly over Bluetooth, persists runtime data into SQLite, applies the latest saved calibration if one exists, and updates the menu bar without the Python cockpit running.
+The app scans for the Polar H10, connects directly over Bluetooth, persists runtime data into SQLite, applies the latest saved calibration if one exists, otherwise falls back to the checked-in default calibration, and updates the menu bar without the Python cockpit running.
 
 If you want the optional Python tooling for calibration, evaluation, or older inspection views:
 
