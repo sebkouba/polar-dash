@@ -60,6 +60,54 @@ private struct StatusBarView: View {
     }
 }
 
+private enum HistoryMetric: String, CaseIterable, Identifiable {
+    case breathingRate
+    case heartRate
+    case heartRateVariability
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .breathingRate:
+            return "Breathing Rate"
+        case .heartRate:
+            return "Heart Rate"
+        case .heartRateVariability:
+            return "HRV (RMSSD)"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .breathingRate:
+            return .blue
+        case .heartRate:
+            return .red
+        case .heartRateVariability:
+            return .green
+        }
+    }
+
+    var storageKey: String {
+        switch self {
+        case .breathingRate:
+            return "historyShowsBreathingRate"
+        case .heartRate:
+            return "historyShowsHeartRate"
+        case .heartRateVariability:
+            return "historyShowsHeartRateVariability"
+        }
+    }
+}
+
+private struct BreathingAxisTick: Identifiable {
+    let actualValue: Double
+    let projectedValue: Double
+
+    var id: Double { projectedValue }
+}
+
 private struct MenuContentView: View {
     private enum Page {
         case dashboard
@@ -68,6 +116,9 @@ private struct MenuContentView: View {
 
     @ObservedObject var model: BreathingBarModel
     @State private var page: Page = .dashboard
+    @AppStorage(HistoryMetric.breathingRate.storageKey) private var showsBreathingRate = true
+    @AppStorage(HistoryMetric.heartRate.storageKey) private var showsHeartRate = true
+    @AppStorage(HistoryMetric.heartRateVariability.storageKey) private var showsHeartRateVariability = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -116,6 +167,93 @@ private struct MenuContentView: View {
 
     private func flashingColor(for color: Color) -> Color {
         model.isAlerting && model.flashOn ? .white : color
+    }
+
+    private var isAnyMetricVisible: Bool {
+        showsBreathingRate || showsHeartRate || showsHeartRateVariability
+    }
+
+    private var hasVisibleLeftMetrics: Bool {
+        showsHeartRate || showsHeartRateVariability
+    }
+
+    private var breathingAxisDefaultDomain: ClosedRange<Double> {
+        let lower = max(0.0, model.lowerThreshold - 2.0)
+        let upper = min(40.0, max(lower + 8.0, model.upperThreshold + 2.0))
+        return lower...upper
+    }
+
+    private var leftAxisValues: [Double] {
+        model.historySamples.reduce(into: []) { values, sample in
+            if showsHeartRate, let heartRate = sample.heartRate {
+                values.append(heartRate)
+            }
+            if showsHeartRateVariability, let hrvRMSSD = sample.hrvRMSSD {
+                values.append(hrvRMSSD)
+            }
+        }
+    }
+
+    private var breathingAxisValues: [Double] {
+        guard showsBreathingRate else {
+            return []
+        }
+        return model.historySamples.compactMap(\.breathingRate)
+    }
+
+    private var leftAxisDomain: ClosedRange<Double> {
+        metricDomain(
+            for: leftAxisValues,
+            default: 0.0...200.0,
+            hardLower: 0.0,
+            hardUpper: 200.0,
+            minimumSpan: 20.0
+        )
+    }
+
+    private var breathingAxisDomain: ClosedRange<Double> {
+        metricDomain(
+            for: breathingAxisValues,
+            default: breathingAxisDefaultDomain,
+            hardLower: 0.0,
+            hardUpper: 40.0,
+            minimumSpan: 8.0
+        )
+    }
+
+    private var breathingAxisTicks: [BreathingAxisTick] {
+        guard showsBreathingRate else {
+            return []
+        }
+
+        let domain = breathingAxisDomain
+        let step = niceAxisStep(for: domain.upperBound - domain.lowerBound)
+        let firstTick = ceil(domain.lowerBound / step) * step
+        let epsilon = step * 0.25
+        var ticks: [BreathingAxisTick] = []
+        var value = firstTick
+
+        while value <= domain.upperBound + epsilon {
+            ticks.append(
+                BreathingAxisTick(
+                    actualValue: value,
+                    projectedValue: projectedBreathingValue(for: value)
+                )
+            )
+            value += step
+        }
+
+        if ticks.isEmpty {
+            let midpoint = (domain.lowerBound + domain.upperBound) / 2.0
+            return [
+                BreathingAxisTick(
+                    actualValue: midpoint,
+                    projectedValue: projectedBreathingValue(for: midpoint)
+                )
+            ]
+        }
+
+        return ticks
     }
 
     private var dashboardPage: some View {
@@ -222,53 +360,220 @@ private struct MenuContentView: View {
                 .padding(14)
                 .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             } else {
-                Chart {
-                    ForEach(model.historySamples, id: \.sampledAt) { sample in
-                        if let breathingRate = sample.breathingRate {
-                            LineMark(
-                                x: .value("Time", sample.sampledAt),
-                                y: .value("Value", breathingRate)
-                            )
-                            .foregroundStyle(by: .value("Metric", "Breathing Rate"))
-                            .interpolationMethod(.catmullRom)
+                VStack(alignment: .leading, spacing: 12) {
+                    if isAnyMetricVisible {
+                        Chart {
+                            ForEach(model.historySamples, id: \.sampledAt) { sample in
+                                if showsBreathingRate, let breathingRate = sample.breathingRate {
+                                    LineMark(
+                                        x: .value("Time", sample.sampledAt),
+                                        y: .value("Breathing Projection", projectedBreathingValue(for: breathingRate))
+                                    )
+                                    .foregroundStyle(HistoryMetric.breathingRate.color)
+                                    .interpolationMethod(.catmullRom)
+                                }
+                                if showsHeartRate, let heartRate = sample.heartRate {
+                                    LineMark(
+                                        x: .value("Time", sample.sampledAt),
+                                        y: .value("Heart Rate", heartRate)
+                                    )
+                                    .foregroundStyle(HistoryMetric.heartRate.color)
+                                    .interpolationMethod(.catmullRom)
+                                }
+                                if showsHeartRateVariability, let hrvRMSSD = sample.hrvRMSSD {
+                                    LineMark(
+                                        x: .value("Time", sample.sampledAt),
+                                        y: .value("HRV (RMSSD)", hrvRMSSD)
+                                    )
+                                    .foregroundStyle(HistoryMetric.heartRateVariability.color)
+                                    .interpolationMethod(.catmullRom)
+                                }
+                            }
                         }
-                        if let heartRate = sample.heartRate {
-                            LineMark(
-                                x: .value("Time", sample.sampledAt),
-                                y: .value("Value", heartRate)
-                            )
-                            .foregroundStyle(by: .value("Metric", "Heart Rate"))
-                            .interpolationMethod(.catmullRom)
+                        .chartXScale(domain: model.historyGraphRange)
+                        .chartYScale(domain: leftAxisDomain)
+                        .chartPlotStyle { plotArea in
+                            plotArea.clipped()
                         }
-                        if let hrvRMSSD = sample.hrvRMSSD {
-                            LineMark(
-                                x: .value("Time", sample.sampledAt),
-                                y: .value("Value", hrvRMSSD)
-                            )
-                            .foregroundStyle(by: .value("Metric", "HRV (RMSSD)"))
-                            .interpolationMethod(.catmullRom)
+                        .chartYAxis {
+                            if hasVisibleLeftMetrics {
+                                AxisMarks(position: .leading)
+                            }
+                            if showsBreathingRate {
+                                AxisMarks(position: .trailing, values: breathingAxisTicks.map(\.projectedValue)) { value in
+                                    if
+                                        let projectedValue = value.as(Double.self),
+                                        let tick = breathingAxisTick(for: projectedValue)
+                                    {
+                                        AxisTick()
+                                        AxisValueLabel {
+                                            Text(axisLabel(for: tick.actualValue))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .frame(height: 260)
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("All graph lines are hidden.")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Click a legend item below to show a series again.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 260, alignment: .leading)
+                    }
+
+                    HStack(spacing: 14) {
+                        ForEach(HistoryMetric.allCases) { metric in
+                            Button {
+                                toggleHistoryMetric(metric)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(metric.color)
+                                        .frame(width: 10, height: 10)
+                                    Text(metric.title)
+                                        .strikethrough(!isMetricVisible(metric), color: .secondary)
+                                }
+                                .foregroundStyle(isMetricVisible(metric) ? Color.primary : Color.secondary)
+                                .opacity(isMetricVisible(metric) ? 1.0 : 0.45)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
-                .chartForegroundStyleScale([
-                    "Breathing Rate": Color.blue,
-                    "Heart Rate": Color.red,
-                    "HRV (RMSSD)": Color.green,
-                ])
-                .chartLegend(position: .bottom, alignment: .leading)
-                .chartXScale(domain: model.historyGraphRange)
-                .chartYScale(domain: 0.0...200.0)
-                .chartPlotStyle { plotArea in
-                    plotArea.clipped()
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading)
-                }
-                .frame(height: 260)
                 .padding(10)
                 .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
         }
+    }
+
+    private func isMetricVisible(_ metric: HistoryMetric) -> Bool {
+        switch metric {
+        case .breathingRate:
+            return showsBreathingRate
+        case .heartRate:
+            return showsHeartRate
+        case .heartRateVariability:
+            return showsHeartRateVariability
+        }
+    }
+
+    private func toggleHistoryMetric(_ metric: HistoryMetric) {
+        switch metric {
+        case .breathingRate:
+            showsBreathingRate.toggle()
+        case .heartRate:
+            showsHeartRate.toggle()
+        case .heartRateVariability:
+            showsHeartRateVariability.toggle()
+        }
+    }
+
+    private func projectedBreathingValue(for breathingRate: Double) -> Double {
+        project(value: breathingRate, from: breathingAxisDomain, to: leftAxisDomain)
+    }
+
+    private func breathingAxisTick(for projectedValue: Double) -> BreathingAxisTick? {
+        breathingAxisTicks.first { abs($0.projectedValue - projectedValue) < 0.001 }
+    }
+
+    private func axisLabel(for value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0)))
+    }
+
+    private func metricDomain(
+        for values: [Double],
+        default defaultDomain: ClosedRange<Double>,
+        hardLower: Double,
+        hardUpper: Double,
+        minimumSpan: Double
+    ) -> ClosedRange<Double> {
+        guard let minimum = values.min(), let maximum = values.max() else {
+            return normalizedDomain(defaultDomain, hardLower: hardLower, hardUpper: hardUpper, minimumSpan: minimumSpan)
+        }
+
+        let span = maximum - minimum
+        let padding = max(span * 0.18, minimumSpan * 0.35)
+        let candidateDomain: ClosedRange<Double>
+
+        if span < 0.001 {
+            candidateDomain = (minimum - minimumSpan / 2.0)...(maximum + minimumSpan / 2.0)
+        } else {
+            candidateDomain = (minimum - padding)...(maximum + padding)
+        }
+
+        return normalizedDomain(candidateDomain, hardLower: hardLower, hardUpper: hardUpper, minimumSpan: minimumSpan)
+    }
+
+    private func normalizedDomain(
+        _ domain: ClosedRange<Double>,
+        hardLower: Double,
+        hardUpper: Double,
+        minimumSpan: Double
+    ) -> ClosedRange<Double> {
+        var lower = max(hardLower, min(hardUpper, domain.lowerBound))
+        var upper = max(hardLower, min(hardUpper, domain.upperBound))
+
+        if upper - lower < minimumSpan {
+            let halfSpan = minimumSpan / 2.0
+            var center = (lower + upper) / 2.0
+            center = min(max(center, hardLower + halfSpan), hardUpper - halfSpan)
+            lower = center - halfSpan
+            upper = center + halfSpan
+        }
+
+        if lower < hardLower {
+            upper += hardLower - lower
+            lower = hardLower
+        }
+        if upper > hardUpper {
+            lower -= upper - hardUpper
+            upper = hardUpper
+        }
+
+        if upper <= lower {
+            lower = hardLower
+            upper = min(hardUpper, hardLower + minimumSpan)
+        }
+
+        return lower...upper
+    }
+
+    private func project(
+        value: Double,
+        from sourceDomain: ClosedRange<Double>,
+        to targetDomain: ClosedRange<Double>
+    ) -> Double {
+        let clampedValue = min(max(value, sourceDomain.lowerBound), sourceDomain.upperBound)
+        let sourceSpan = sourceDomain.upperBound - sourceDomain.lowerBound
+        guard sourceSpan > 0 else {
+            return targetDomain.lowerBound
+        }
+        let progress = (clampedValue - sourceDomain.lowerBound) / sourceSpan
+        return targetDomain.lowerBound + progress * (targetDomain.upperBound - targetDomain.lowerBound)
+    }
+
+    private func niceAxisStep(for span: Double) -> Double {
+        let roughStep = max(span / 4.0, 1.0)
+        let magnitude = pow(10.0, floor(log10(roughStep)))
+        let normalized = roughStep / magnitude
+
+        let stepMultiplier: Double
+        switch normalized {
+        case ..<1.5:
+            stepMultiplier = 1.0
+        case ..<3.5:
+            stepMultiplier = 2.0
+        case ..<7.5:
+            stepMultiplier = 5.0
+        default:
+            stepMultiplier = 10.0
+        }
+
+        return stepMultiplier * magnitude
     }
 
     private var settingsPage: some View {
