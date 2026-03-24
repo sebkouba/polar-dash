@@ -372,7 +372,7 @@ private struct MenuContentView: View {
                                         y: .value("Heart Rate", heartRate)
                                     )
                                     .foregroundStyle(HistoryMetric.heartRate.color)
-                                    .interpolationMethod(.catmullRom)
+                                    .interpolationMethod(.linear)
                                 }
                                 if showsHeartRateVariability, let hrvRMSSD = sample.hrvRMSSD {
                                     LineMark(
@@ -380,7 +380,7 @@ private struct MenuContentView: View {
                                         y: .value("HRV (RMSSD)", hrvRMSSD)
                                     )
                                     .foregroundStyle(HistoryMetric.heartRateVariability.color)
-                                    .interpolationMethod(.catmullRom)
+                                    .interpolationMethod(.linear)
                                 }
                             }
                         }
