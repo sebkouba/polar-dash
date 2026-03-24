@@ -60,13 +60,9 @@ private struct StatusBarView: View {
     }
 }
 
-private enum HistoryMetric: String, CaseIterable, Identifiable {
-    case breathingRate
-    case heartRate
-    case heartRateVariability
+private typealias HistoryMetric = HistoryGraphMetric
 
-    var id: String { rawValue }
-
+private extension HistoryMetric {
     var title: String {
         switch self {
         case .breathingRate:
@@ -99,12 +95,26 @@ private enum HistoryMetric: String, CaseIterable, Identifiable {
             return "historyShowsHeartRateVariability"
         }
     }
-}
 
-private struct BreathingAxisTick: Identifiable {
-    let actualValue: Double
+    var latestValueFormat: FloatingPointFormatStyle<Double> {
+        switch self {
+        case .breathingRate:
+            return .number.precision(.fractionLength(1))
+        case .heartRate, .heartRateVariability:
+            return .number.precision(.fractionLength(0))
+        }
+    }
 
-    var id: Double { actualValue }
+    var unitSuffix: String {
+        switch self {
+        case .breathingRate:
+            return "br/min"
+        case .heartRate:
+            return "bpm"
+        case .heartRateVariability:
+            return "ms"
+        }
+    }
 }
 
 private struct MenuContentView: View {
@@ -172,8 +182,8 @@ private struct MenuContentView: View {
         showsBreathingRate || showsHeartRate || showsHeartRateVariability
     }
 
-    private var hasVisibleLeftMetrics: Bool {
-        showsHeartRate || showsHeartRateVariability
+    private var visibleMetrics: [HistoryMetric] {
+        HistoryMetric.allCases.filter(isMetricVisible)
     }
 
     private var breathingAxisDefaultDomain: ClosedRange<Double> {
@@ -182,67 +192,8 @@ private struct MenuContentView: View {
         return lower...upper
     }
 
-    private var leftAxisValues: [Double] {
-        model.historySamples.reduce(into: []) { values, sample in
-            if showsHeartRate, let heartRate = sample.heartRate {
-                values.append(heartRate)
-            }
-            if showsHeartRateVariability, let hrvRMSSD = sample.hrvRMSSD {
-                values.append(hrvRMSSD)
-            }
-        }
-    }
-
-    private var breathingAxisValues: [Double] {
-        guard showsBreathingRate else {
-            return []
-        }
-        return model.historySamples.compactMap(\.breathingRate)
-    }
-
-    private var leftAxisDomain: ClosedRange<Double> {
-        metricDomain(
-            for: leftAxisValues,
-            default: 0.0...200.0,
-            hardLower: 0.0,
-            hardUpper: 200.0,
-            minimumSpan: 20.0
-        )
-    }
-
-    private var breathingAxisDomain: ClosedRange<Double> {
-        metricDomain(
-            for: breathingAxisValues,
-            default: breathingAxisDefaultDomain,
-            hardLower: 0.0,
-            hardUpper: 40.0,
-            minimumSpan: 8.0
-        )
-    }
-
-    private var breathingAxisTicks: [BreathingAxisTick] {
-        guard showsBreathingRate else {
-            return []
-        }
-
-        let domain = breathingAxisDomain
-        let step = niceAxisStep(for: domain.upperBound - domain.lowerBound)
-        let firstTick = ceil(domain.lowerBound / step) * step
-        let epsilon = step * 0.25
-        var ticks: [BreathingAxisTick] = []
-        var value = firstTick
-
-        while value <= domain.upperBound + epsilon {
-            ticks.append(BreathingAxisTick(actualValue: value))
-            value += step
-        }
-
-        if ticks.isEmpty {
-            let midpoint = (domain.lowerBound + domain.upperBound) / 2.0
-            return [BreathingAxisTick(actualValue: midpoint)]
-        }
-
-        return ticks
+    private var visibleHistorySeries: [HistoryGraphSeries] {
+        visibleMetrics.map(historySeries(for:))
     }
 
     private var dashboardPage: some View {
@@ -351,57 +302,15 @@ private struct MenuContentView: View {
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     if isAnyMetricVisible {
-                        Chart {
-                            if !hasVisibleLeftMetrics {
-                                PointMark(
-                                    x: .value("Time", model.historyGraphRange.lowerBound),
-                                    y: .value("Placeholder", leftAxisDomain.lowerBound)
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(visibleHistorySeries.enumerated()), id: \.element.id) { index, series in
+                                historyMetricChart(
+                                    series: series,
+                                    showsXAxis: index == visibleHistorySeries.indices.last,
+                                    visibleMetricCount: visibleHistorySeries.count
                                 )
-                                .foregroundStyle(.clear)
-
-                                PointMark(
-                                    x: .value("Time", model.historyGraphRange.upperBound),
-                                    y: .value("Placeholder", leftAxisDomain.upperBound)
-                                )
-                                .foregroundStyle(.clear)
-                            }
-                            ForEach(model.historySamples, id: \.sampledAt) { sample in
-                                if showsHeartRate, let heartRate = sample.heartRate {
-                                    LineMark(
-                                        x: .value("Time", sample.sampledAt),
-                                        y: .value("Heart Rate", heartRate),
-                                        series: .value("Metric", HistoryMetric.heartRate.title)
-                                    )
-                                    .foregroundStyle(HistoryMetric.heartRate.color)
-                                    .interpolationMethod(.linear)
-                                }
-                                if showsHeartRateVariability, let hrvRMSSD = sample.hrvRMSSD {
-                                    LineMark(
-                                        x: .value("Time", sample.sampledAt),
-                                        y: .value("HRV (RMSSD)", hrvRMSSD),
-                                        series: .value("Metric", HistoryMetric.heartRateVariability.title)
-                                    )
-                                    .foregroundStyle(HistoryMetric.heartRateVariability.color)
-                                    .interpolationMethod(.linear)
-                                }
                             }
                         }
-                        .chartXScale(domain: model.historyGraphRange)
-                        .chartYScale(domain: leftAxisDomain)
-                        .chartPlotStyle { plotArea in
-                            plotArea.clipped()
-                        }
-                        .chartYAxis {
-                            if hasVisibleLeftMetrics {
-                                AxisMarks(position: .leading)
-                            }
-                        }
-                        .chartOverlay { proxy in
-                            GeometryReader { geometry in
-                                breathingOverlay(proxy: proxy, geometry: geometry)
-                            }
-                        }
-                        .frame(height: 260)
                     } else {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("All graph lines are hidden.")
@@ -460,160 +369,114 @@ private struct MenuContentView: View {
         }
     }
 
-    private func axisLabel(for value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(0)))
-    }
-
     @ViewBuilder
-    private func breathingOverlay(proxy: ChartProxy, geometry: GeometryProxy) -> some View {
-        if showsBreathingRate, let plotFrame = proxy.plotFrame.map({ geometry[$0] }) {
-            let plottedSamples = model.historySamples.compactMap { sample -> (CGFloat, CGFloat)? in
-                guard
-                    let breathingRate = sample.breathingRate,
-                    let xPosition = proxy.position(forX: sample.sampledAt)
-                else {
-                    return nil
-                }
-                return (
-                    xPosition,
-                    breathingYPosition(for: breathingRate, plotHeight: plotFrame.height)
-                )
-            }
-
-            ZStack(alignment: .topLeading) {
-                Path { path in
-                    guard let firstSample = plottedSamples.first else {
-                        return
-                    }
-                    path.move(to: CGPoint(x: firstSample.0, y: firstSample.1))
-                    for sample in plottedSamples.dropFirst() {
-                        path.addLine(to: CGPoint(x: sample.0, y: sample.1))
-                    }
-                }
-                .stroke(
-                    HistoryMetric.breathingRate.color,
-                    style: StrokeStyle(lineWidth: 3.0, lineCap: .round, lineJoin: .round)
-                )
-                .frame(width: plotFrame.width, height: plotFrame.height)
-                .offset(x: plotFrame.minX, y: plotFrame.minY)
-                .clipped()
-
-                ForEach(breathingAxisTicks) { tick in
-                    let yPosition = breathingYPosition(for: tick.actualValue, plotHeight: plotFrame.height)
-                    Path { path in
-                        path.move(to: CGPoint(x: plotFrame.maxX, y: plotFrame.minY + yPosition))
-                        path.addLine(to: CGPoint(x: plotFrame.maxX + 6.0, y: plotFrame.minY + yPosition))
-                    }
-                    .stroke(.secondary.opacity(0.5), lineWidth: 1.0)
-
-                    Text(axisLabel(for: tick.actualValue))
+    private func historyMetricChart(
+        series: HistoryGraphSeries,
+        showsXAxis: Bool,
+        visibleMetricCount: Int
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(series.metric.color)
+                    .frame(width: 8, height: 8)
+                Text(series.metric.title)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                if let latestValue = series.latestValue {
+                    Text("\(latestValue.formatted(series.metric.latestValueFormat)) \(series.metric.unitSuffix)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .position(
-                            x: plotFrame.maxX + 22.0,
-                            y: plotFrame.minY + yPosition
-                        )
+                        .monospacedDigit()
+                } else {
+                    Text("No recent samples")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
+
+            Chart {
+                ForEach(series.segments) { segment in
+                    ForEach(segment.points) { point in
+                        LineMark(
+                            x: .value("Time", point.sampledAt),
+                            y: .value(series.metric.title, point.value),
+                            series: .value("Segment", segment.id)
+                        )
+                        .foregroundStyle(series.metric.color)
+                        .interpolationMethod(.linear)
+                        .lineStyle(StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
+                    }
+
+                    if let point = segment.points.first, segment.points.count == 1 {
+                        PointMark(
+                            x: .value("Time", point.sampledAt),
+                            y: .value(series.metric.title, point.value)
+                        )
+                        .foregroundStyle(series.metric.color)
+                    }
+                }
+            }
+            .chartXScale(domain: model.historyGraphRange)
+            .chartYScale(domain: series.domain)
+            .chartPlotStyle { plotArea in
+                plotArea.clipped()
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading)
+            }
+            .chartXAxis {
+                if showsXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 4))
+                }
+            }
+            .frame(height: historyChartHeight(visibleMetricCount: visibleMetricCount, showsXAxis: showsXAxis))
         }
     }
 
-    private func breathingYPosition(for breathingRate: Double, plotHeight: CGFloat) -> CGFloat {
-        let normalizedRate = normalizedValue(
-            value: breathingRate,
-            within: breathingAxisDomain
+    private func historySeries(for metric: HistoryMetric) -> HistoryGraphSeries {
+        HistoryGraphBuilder.makeSeries(
+            samples: model.historySamples,
+            metric: metric,
+            scale: historyScale(for: metric)
         )
-        return plotHeight * CGFloat(1.0 - normalizedRate)
     }
 
-    private func metricDomain(
-        for values: [Double],
-        default defaultDomain: ClosedRange<Double>,
-        hardLower: Double,
-        hardUpper: Double,
-        minimumSpan: Double
-    ) -> ClosedRange<Double> {
-        guard let minimum = values.min(), let maximum = values.max() else {
-            return normalizedDomain(defaultDomain, hardLower: hardLower, hardUpper: hardUpper, minimumSpan: minimumSpan)
+    private func historyScale(for metric: HistoryMetric) -> HistoryGraphScale {
+        switch metric {
+        case .breathingRate:
+            return HistoryGraphScale(
+                defaultDomain: breathingAxisDefaultDomain,
+                hardLower: 0.0,
+                hardUpper: 40.0,
+                minimumSpan: 8.0
+            )
+        case .heartRate:
+            return HistoryGraphScale(
+                defaultDomain: 40.0...140.0,
+                hardLower: 0.0,
+                hardUpper: 200.0,
+                minimumSpan: 20.0
+            )
+        case .heartRateVariability:
+            return HistoryGraphScale(
+                defaultDomain: 0.0...80.0,
+                hardLower: 0.0,
+                hardUpper: 200.0,
+                minimumSpan: 20.0
+            )
         }
-
-        let span = maximum - minimum
-        let padding = max(span * 0.18, minimumSpan * 0.35)
-        let candidateDomain: ClosedRange<Double>
-
-        if span < 0.001 {
-            candidateDomain = (minimum - minimumSpan / 2.0)...(maximum + minimumSpan / 2.0)
-        } else {
-            candidateDomain = (minimum - padding)...(maximum + padding)
-        }
-
-        return normalizedDomain(candidateDomain, hardLower: hardLower, hardUpper: hardUpper, minimumSpan: minimumSpan)
     }
 
-    private func normalizedDomain(
-        _ domain: ClosedRange<Double>,
-        hardLower: Double,
-        hardUpper: Double,
-        minimumSpan: Double
-    ) -> ClosedRange<Double> {
-        var lower = max(hardLower, min(hardUpper, domain.lowerBound))
-        var upper = max(hardLower, min(hardUpper, domain.upperBound))
-
-        if upper - lower < minimumSpan {
-            let halfSpan = minimumSpan / 2.0
-            var center = (lower + upper) / 2.0
-            center = min(max(center, hardLower + halfSpan), hardUpper - halfSpan)
-            lower = center - halfSpan
-            upper = center + halfSpan
-        }
-
-        if lower < hardLower {
-            upper += hardLower - lower
-            lower = hardLower
-        }
-        if upper > hardUpper {
-            lower -= upper - hardUpper
-            upper = hardUpper
-        }
-
-        if upper <= lower {
-            lower = hardLower
-            upper = min(hardUpper, hardLower + minimumSpan)
-        }
-
-        return lower...upper
-    }
-
-    private func normalizedValue(
-        value: Double,
-        within domain: ClosedRange<Double>
-    ) -> Double {
-        let clampedValue = min(max(value, domain.lowerBound), domain.upperBound)
-        let span = domain.upperBound - domain.lowerBound
-        guard span > 0 else {
-            return 0.0
-        }
-        return (clampedValue - domain.lowerBound) / span
-    }
-
-    private func niceAxisStep(for span: Double) -> Double {
-        let roughStep = max(span / 4.0, 1.0)
-        let magnitude = pow(10.0, floor(log10(roughStep)))
-        let normalized = roughStep / magnitude
-
-        let stepMultiplier: Double
-        switch normalized {
-        case ..<1.5:
-            stepMultiplier = 1.0
-        case ..<3.5:
-            stepMultiplier = 2.0
-        case ..<7.5:
-            stepMultiplier = 5.0
+    private func historyChartHeight(visibleMetricCount: Int, showsXAxis: Bool) -> CGFloat {
+        switch visibleMetricCount {
+        case ...1:
+            return 260
+        case 2:
+            return showsXAxis ? 128 : 112
         default:
-            stepMultiplier = 10.0
+            return showsXAxis ? 96 : 80
         }
-
-        return stepMultiplier * magnitude
     }
 
     private var settingsPage: some View {

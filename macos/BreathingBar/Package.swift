@@ -26,7 +26,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BreathingBarTests",
-            dependencies: ["BreathingBarCore"],
+            dependencies: ["BreathingBar", "BreathingBarCore"],
         )
     ]
 )
