@@ -103,9 +103,8 @@ private enum HistoryMetric: String, CaseIterable, Identifiable {
 
 private struct BreathingAxisTick: Identifiable {
     let actualValue: Double
-    let projectedValue: Double
 
-    var id: Double { projectedValue }
+    var id: Double { actualValue }
 }
 
 private struct MenuContentView: View {
@@ -234,23 +233,13 @@ private struct MenuContentView: View {
         var value = firstTick
 
         while value <= domain.upperBound + epsilon {
-            ticks.append(
-                BreathingAxisTick(
-                    actualValue: value,
-                    projectedValue: projectedBreathingValue(for: value)
-                )
-            )
+            ticks.append(BreathingAxisTick(actualValue: value))
             value += step
         }
 
         if ticks.isEmpty {
             let midpoint = (domain.lowerBound + domain.upperBound) / 2.0
-            return [
-                BreathingAxisTick(
-                    actualValue: midpoint,
-                    projectedValue: projectedBreathingValue(for: midpoint)
-                )
-            ]
+            return [BreathingAxisTick(actualValue: midpoint)]
         }
 
         return ticks
@@ -363,15 +352,20 @@ private struct MenuContentView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if isAnyMetricVisible {
                         Chart {
+                            if !hasVisibleLeftMetrics {
+                                PointMark(
+                                    x: .value("Time", model.historyGraphRange.lowerBound),
+                                    y: .value("Placeholder", leftAxisDomain.lowerBound)
+                                )
+                                .foregroundStyle(.clear)
+
+                                PointMark(
+                                    x: .value("Time", model.historyGraphRange.upperBound),
+                                    y: .value("Placeholder", leftAxisDomain.upperBound)
+                                )
+                                .foregroundStyle(.clear)
+                            }
                             ForEach(model.historySamples, id: \.sampledAt) { sample in
-                                if showsBreathingRate, let breathingRate = sample.breathingRate {
-                                    LineMark(
-                                        x: .value("Time", sample.sampledAt),
-                                        y: .value("Breathing Projection", projectedBreathingValue(for: breathingRate))
-                                    )
-                                    .foregroundStyle(HistoryMetric.breathingRate.color)
-                                    .interpolationMethod(.catmullRom)
-                                }
                                 if showsHeartRate, let heartRate = sample.heartRate {
                                     LineMark(
                                         x: .value("Time", sample.sampledAt),
@@ -399,18 +393,10 @@ private struct MenuContentView: View {
                             if hasVisibleLeftMetrics {
                                 AxisMarks(position: .leading)
                             }
-                            if showsBreathingRate {
-                                AxisMarks(position: .trailing, values: breathingAxisTicks.map(\.projectedValue)) { value in
-                                    if
-                                        let projectedValue = value.as(Double.self),
-                                        let tick = breathingAxisTick(for: projectedValue)
-                                    {
-                                        AxisTick()
-                                        AxisValueLabel {
-                                            Text(axisLabel(for: tick.actualValue))
-                                        }
-                                    }
-                                }
+                        }
+                        .chartOverlay { proxy in
+                            GeometryReader { geometry in
+                                breathingOverlay(proxy: proxy, geometry: geometry)
                             }
                         }
                         .frame(height: 260)
@@ -472,16 +458,70 @@ private struct MenuContentView: View {
         }
     }
 
-    private func projectedBreathingValue(for breathingRate: Double) -> Double {
-        project(value: breathingRate, from: breathingAxisDomain, to: leftAxisDomain)
-    }
-
-    private func breathingAxisTick(for projectedValue: Double) -> BreathingAxisTick? {
-        breathingAxisTicks.first { abs($0.projectedValue - projectedValue) < 0.001 }
-    }
-
     private func axisLabel(for value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(0)))
+    }
+
+    @ViewBuilder
+    private func breathingOverlay(proxy: ChartProxy, geometry: GeometryProxy) -> some View {
+        if showsBreathingRate, let plotFrame = proxy.plotFrame.map({ geometry[$0] }) {
+            let plottedSamples = model.historySamples.compactMap { sample -> (CGFloat, CGFloat)? in
+                guard
+                    let breathingRate = sample.breathingRate,
+                    let xPosition = proxy.position(forX: sample.sampledAt)
+                else {
+                    return nil
+                }
+                return (
+                    xPosition,
+                    breathingYPosition(for: breathingRate, plotHeight: plotFrame.height)
+                )
+            }
+
+            ZStack(alignment: .topLeading) {
+                Path { path in
+                    guard let firstSample = plottedSamples.first else {
+                        return
+                    }
+                    path.move(to: CGPoint(x: firstSample.0, y: firstSample.1))
+                    for sample in plottedSamples.dropFirst() {
+                        path.addLine(to: CGPoint(x: sample.0, y: sample.1))
+                    }
+                }
+                .stroke(
+                    HistoryMetric.breathingRate.color,
+                    style: StrokeStyle(lineWidth: 3.0, lineCap: .round, lineJoin: .round)
+                )
+                .frame(width: plotFrame.width, height: plotFrame.height)
+                .offset(x: plotFrame.minX, y: plotFrame.minY)
+                .clipped()
+
+                ForEach(breathingAxisTicks) { tick in
+                    let yPosition = breathingYPosition(for: tick.actualValue, plotHeight: plotFrame.height)
+                    Path { path in
+                        path.move(to: CGPoint(x: plotFrame.maxX, y: plotFrame.minY + yPosition))
+                        path.addLine(to: CGPoint(x: plotFrame.maxX + 6.0, y: plotFrame.minY + yPosition))
+                    }
+                    .stroke(.secondary.opacity(0.5), lineWidth: 1.0)
+
+                    Text(axisLabel(for: tick.actualValue))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .position(
+                            x: plotFrame.maxX + 22.0,
+                            y: plotFrame.minY + yPosition
+                        )
+                }
+            }
+        }
+    }
+
+    private func breathingYPosition(for breathingRate: Double, plotHeight: CGFloat) -> CGFloat {
+        let normalizedRate = normalizedValue(
+            value: breathingRate,
+            within: breathingAxisDomain
+        )
+        return plotHeight * CGFloat(1.0 - normalizedRate)
     }
 
     private func metricDomain(
@@ -542,18 +582,16 @@ private struct MenuContentView: View {
         return lower...upper
     }
 
-    private func project(
+    private func normalizedValue(
         value: Double,
-        from sourceDomain: ClosedRange<Double>,
-        to targetDomain: ClosedRange<Double>
+        within domain: ClosedRange<Double>
     ) -> Double {
-        let clampedValue = min(max(value, sourceDomain.lowerBound), sourceDomain.upperBound)
-        let sourceSpan = sourceDomain.upperBound - sourceDomain.lowerBound
-        guard sourceSpan > 0 else {
-            return targetDomain.lowerBound
+        let clampedValue = min(max(value, domain.lowerBound), domain.upperBound)
+        let span = domain.upperBound - domain.lowerBound
+        guard span > 0 else {
+            return 0.0
         }
-        let progress = (clampedValue - sourceDomain.lowerBound) / sourceSpan
-        return targetDomain.lowerBound + progress * (targetDomain.upperBound - targetDomain.lowerBound)
+        return (clampedValue - domain.lowerBound) / span
     }
 
     private func niceAxisStep(for span: Double) -> Double {
