@@ -5,6 +5,7 @@ import BreathingBarCore
 private enum DefaultsKey {
     static let lowThreshold = "lowThreshold"
     static let highThreshold = "highThreshold"
+    static let databasePath = "databasePath"
 }
 
 @MainActor
@@ -252,8 +253,13 @@ final class BreathingBarModel: ObservableObject {
     }
 
     private static func resolveDatabaseURL() -> URL {
+        let defaults = UserDefaults.standard
         if let explicitPath = ProcessInfo.processInfo.environment["POLAR_DASH_DB"], !explicitPath.isEmpty {
             return URL(fileURLWithPath: explicitPath).standardizedFileURL
+        }
+
+        if let storedPath = defaults.string(forKey: DefaultsKey.databasePath), !storedPath.isEmpty {
+            return URL(fileURLWithPath: storedPath).standardizedFileURL
         }
 
         let fileManager = FileManager.default
@@ -267,6 +273,7 @@ final class BreathingBarModel: ObservableObject {
             while true {
                 let candidate = current.appendingPathComponent("data/polar_dash.db")
                 if fileManager.fileExists(atPath: candidate.path) {
+                    defaults.set(candidate.path, forKey: DefaultsKey.databasePath)
                     return candidate
                 }
                 let parent = current.deletingLastPathComponent()
@@ -277,8 +284,12 @@ final class BreathingBarModel: ObservableObject {
             }
         }
 
-        return URL(fileURLWithPath: fileManager.currentDirectoryPath)
-            .appendingPathComponent("data/polar_dash.db")
+        let applicationSupportRoot = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+        let appDirectory = applicationSupportRoot.appendingPathComponent("PolarDash", isDirectory: true)
+        let defaultURL = appDirectory.appendingPathComponent("polar_dash.db")
+        defaults.set(defaultURL.path, forKey: DefaultsKey.databasePath)
+        return defaultURL
             .standardizedFileURL
     }
 }
