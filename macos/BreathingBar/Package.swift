@@ -13,8 +13,8 @@ let package = Package(
     targets: [
         .target(
             name: "BreathingBarCore",
-            linkerSettings: [
-                .linkedLibrary("sqlite3")
+            resources: [
+                .process("Resources")
             ]
         ),
         .executableTarget(

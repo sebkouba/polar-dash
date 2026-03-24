@@ -29,18 +29,14 @@ final class DefaultCalibrationStoreTests: XCTestCase {
         XCTAssertEqual(calibration.biasByCandidate["acc_pca"], 1.5)
     }
 
-    func testLocateRepoDefaultCalibrationWalksUpSearchRoots() throws {
-        let temporaryDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let repoRoot = temporaryDirectory.appendingPathComponent("repo")
-        let nestedRoot = repoRoot.appendingPathComponent("macos/BreathingBar")
-        let calibrationDirectory = repoRoot.appendingPathComponent("defaults", isDirectory: true)
-        try FileManager.default.createDirectory(at: calibrationDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
-
-        let calibrationURL = calibrationDirectory.appendingPathComponent("default_breathing_calibration.json")
-        try "{}".write(to: calibrationURL, atomically: true, encoding: .utf8)
-
-        let locatedURL = DefaultCalibrationStore.locateRepoDefaultCalibrationURL(searchRoots: [nestedRoot])
-        XCTAssertEqual(locatedURL?.standardizedFileURL, calibrationURL.standardizedFileURL)
+    func testLoadBundledCalibrationDecodesSeededResource() throws {
+        let calibration = try XCTUnwrap(DefaultCalibrationStore.loadBundledCalibration())
+        XCTAssertEqual(calibration.protocolName, "breathing_turnaround_fg_v1")
+        XCTAssertEqual(try XCTUnwrap(calibration.biasByCandidate["acc_pca"]), 3.911209097905669, accuracy: 0.0000001)
+        XCTAssertEqual(
+            try XCTUnwrap(calibration.reliabilityByCandidate["rr_interval"]),
+            0.41232667845099424,
+            accuracy: 0.0000001
+        )
     }
 }

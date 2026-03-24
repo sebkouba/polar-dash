@@ -100,15 +100,7 @@ private struct MenuContentView: View {
                 }
             }
 
-            Text(model.databasePath)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-
             HStack {
-                Button("Reload Calibration") {
-                    model.reloadCalibration()
-                }
                 Button("Reconnect") {
                     model.reconnect()
                 }
@@ -209,7 +201,7 @@ private final class StatusItemController: NSObject, NSPopoverDelegate {
     private func configurePopover() {
         popover.behavior = .transient
         popover.delegate = self
-        popover.contentSize = NSSize(width: 390, height: 270)
+        popover.contentSize = NSSize(width: 390, height: 240)
         popover.contentViewController = NSHostingController(rootView: MenuContentView(model: model))
     }
 

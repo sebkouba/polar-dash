@@ -5,7 +5,6 @@ import BreathingBarCore
 private enum DefaultsKey {
     static let lowThreshold = "lowThreshold"
     static let highThreshold = "highThreshold"
-    static let databasePath = "databasePath"
 }
 
 @MainActor
@@ -13,20 +12,15 @@ final class BreathingBarModel: ObservableObject {
     @Published var currentBreathingRate: Double?
     @Published var currentHeartRate: Double?
     @Published var currentHeartRateVariability: Double?
-    @Published var databasePath: String
     @Published var lowerThreshold: Double
     @Published var upperThreshold: Double
     @Published var flashOn = false
     @Published var runtimeStatus = "Starting collector..."
     @Published var calibrationDescription = "Calibration: default fusion"
-    @Published var connectionDescription = "Session: idle"
+    @Published var connectionDescription = "Connection: idle"
 
     private let engine = LiveBreathingEngine()
     private let collector: PolarBluetoothCollector
-    private let store: SQLiteRuntimeStore?
-    private let databaseURL: URL
-    private var currentSessionID: Int?
-    private var currentDeviceName: String?
     private var flashTask: Task<Void, Never>?
 
     init() {
@@ -34,18 +28,9 @@ final class BreathingBarModel: ObservableObject {
         lowerThreshold = defaults.object(forKey: DefaultsKey.lowThreshold) as? Double ?? 8.0
         upperThreshold = defaults.object(forKey: DefaultsKey.highThreshold) as? Double ?? 24.0
 
-        databaseURL = Self.resolveDatabaseURL()
-        databasePath = databaseURL.path
-        store = try? SQLiteRuntimeStore(databaseURL: databaseURL)
         collector = PolarBluetoothCollector()
 
-        if let calibrationRecord = try? store?.latestCalibrationRecord() {
-            engine.setCalibration(calibrationRecord.calibration)
-            calibrationDescription = Self.describeCalibration(calibrationRecord.calibration)
-        } else if let defaultCalibration = DefaultCalibrationStore.loadFromRepo() {
-            engine.setCalibration(defaultCalibration)
-            calibrationDescription = Self.describeCalibration(defaultCalibration)
-        }
+        reloadCalibration()
 
         configureCollector()
         startFlashing()
@@ -75,26 +60,19 @@ final class BreathingBarModel: ObservableObject {
     }
 
     func reloadCalibration() {
-        guard let calibrationRecord = try? store?.latestCalibrationRecord() else {
-            if let defaultCalibration = DefaultCalibrationStore.loadFromRepo() {
-                engine.setCalibration(defaultCalibration)
-                calibrationDescription = Self.describeCalibration(defaultCalibration)
-                runtimeStatus = "Using repo default fusion calibration."
-            } else {
-                engine.setCalibration(.default())
-                calibrationDescription = "Calibration: default fusion"
-                runtimeStatus = "Using default fusion calibration."
-            }
+        if let bundledCalibration = DefaultCalibrationStore.loadBundledCalibration() {
+            engine.setCalibration(bundledCalibration)
+            calibrationDescription = Self.describeCalibration(bundledCalibration)
             return
         }
-        engine.setCalibration(calibrationRecord.calibration)
-        calibrationDescription = Self.describeCalibration(calibrationRecord.calibration)
-        runtimeStatus = "Reloaded calibration v\(calibrationRecord.id)."
+        engine.setCalibration(.default())
+        calibrationDescription = "Calibration: default fusion"
+        runtimeStatus = "Bundled calibration missing; using uncalibrated fusion."
     }
 
     func reconnect() {
         collector.stop()
-        closeCurrentSession()
+        connectionDescription = "Connection: idle"
         collector.start()
         runtimeStatus = "Restarting collector..."
     }
@@ -104,42 +82,17 @@ final class BreathingBarModel: ObservableObject {
             self?.runtimeStatus = message
         }
         collector.onWarning = { [weak self] message in
-            guard let self else {
-                return
-            }
-            self.runtimeStatus = message
-            try? self.store?.insertEvent(
-                eventType: "collector_warning",
-                details: ["message": message],
-                level: "WARNING",
-                sessionID: self.currentSessionID
-            )
-        }
-        collector.onEvent = { [weak self] eventType, details in
-            guard let self else {
-                return
-            }
-            try? self.store?.insertEvent(
-                eventType: eventType,
-                details: details,
-                sessionID: self.currentSessionID
-            )
+            self?.runtimeStatus = message
         }
         collector.onConnected = { [weak self] deviceName, deviceAddress in
-            self?.beginSession(deviceName: deviceName, deviceAddress: deviceAddress)
+            self?.connectionDescription = "Connection: \(deviceName) (\(deviceAddress))"
+            self?.runtimeStatus = "Connected to \(deviceName)."
         }
         collector.onDisconnected = { [weak self] in
             self?.runtimeStatus = "Collector disconnected."
-            self?.closeCurrentSession()
+            self?.connectionDescription = "Connection: idle"
         }
-        collector.onBatteryLevel = { [weak self] level in
-            guard let self else {
-                return
-            }
-            if let currentSessionID {
-                try? store?.updateSessionBattery(sessionID: currentSessionID, batteryPercent: level)
-            }
-        }
+        collector.onBatteryLevel = { _ in }
         collector.onHeartRateFrame = { [weak self] frame in
             self?.handleHeartRateFrame(frame)
         }
@@ -148,79 +101,27 @@ final class BreathingBarModel: ObservableObject {
         }
     }
 
-    private func beginSession(deviceName: String, deviceAddress: String) {
-        closeCurrentSession()
-        currentDeviceName = deviceName
-        currentSessionID = try? store?.startSession(deviceName: deviceName, deviceAddress: deviceAddress)
-        connectionDescription = "Session \(currentSessionID ?? 0) on \(deviceName)"
-        runtimeStatus = "Connected to \(deviceName)."
-        if let currentSessionID {
-            try? store?.insertEvent(
-                eventType: "collector_connected",
-                details: ["device_name": deviceName, "device_address": deviceAddress],
-                sessionID: currentSessionID
-            )
-        }
-    }
-
-    private func closeCurrentSession() {
-        guard let currentSessionID else {
-            connectionDescription = "Session: idle"
-            return
-        }
-        try? store?.insertEvent(eventType: "collector_disconnected", details: [:], sessionID: currentSessionID)
-        try? store?.closeSession(id: currentSessionID)
-        self.currentSessionID = nil
-        connectionDescription = "Session: idle"
-    }
-
     private func handleHeartRateFrame(_ frame: PolarHeartRateFrame) {
-        guard let currentSessionID else {
-            return
-        }
-        try? store?.insertHeartRateFrame(
-            sessionID: currentSessionID,
-            recordedAtNs: frame.recordedAtNs,
-            averageHeartRateBpm: frame.averageHeartRateBpm,
-            rrIntervalsMs: frame.rrIntervalsMs,
-            energyKJ: frame.energyKJ
-        )
         currentHeartRate = frame.averageHeartRateBpm
         let estimates = engine.addHrFrame(
             recordedAtNs: frame.recordedAtNs,
             averageHeartRateBpm: frame.averageHeartRateBpm,
             rrIntervalsMs: frame.rrIntervalsMs
         )
-        processEstimates(estimates, sessionID: currentSessionID)
+        processEstimates(estimates)
         currentHeartRateVariability = computeRMSSDSeries(beats: engine.recentBeats(lookbackSeconds: 60)).last?.1
     }
 
     private func handlePMDFrame(_ frame: PolarPMDFrame) {
-        guard let currentSessionID else {
-            return
-        }
-
         let estimates: [CandidateEstimate]
         switch frame {
         case let .ecg(sensorRecordedAtNs, sampleRateHz, samples):
-            try? store?.insertECGFrame(
-                sessionID: currentSessionID,
-                sensorRecordedAtNs: sensorRecordedAtNs,
-                sampleRateHz: sampleRateHz,
-                samples: samples
-            )
             estimates = engine.addEcgFrame(
                 sensorRecordedAtNs: sensorRecordedAtNs,
                 sampleRateHz: sampleRateHz,
                 samples: samples
             )
         case let .acc(sensorRecordedAtNs, sampleRateHz, samples):
-            try? store?.insertACCFrame(
-                sessionID: currentSessionID,
-                sensorRecordedAtNs: sensorRecordedAtNs,
-                sampleRateHz: sampleRateHz,
-                samples: samples
-            )
             estimates = engine.addAccFrame(
                 sensorRecordedAtNs: sensorRecordedAtNs,
                 sampleRateHz: sampleRateHz,
@@ -228,18 +129,12 @@ final class BreathingBarModel: ObservableObject {
             )
         }
 
-        processEstimates(estimates, sessionID: currentSessionID)
+        processEstimates(estimates)
     }
 
-    private func processEstimates(_ estimates: [CandidateEstimate], sessionID: Int) {
+    private func processEstimates(_ estimates: [CandidateEstimate]) {
         for estimate in estimates {
-            try? store?.insertBreathingCandidateEstimate(sessionID: sessionID, estimate: estimate)
             if estimate.source == "learned_fusion" {
-                try? store?.insertBreathingEstimate(
-                    sessionID: sessionID,
-                    estimate: estimate,
-                    windowSeconds: engine.windowSeconds
-                )
                 currentBreathingRate = estimate.rateBpm
             }
         }
@@ -262,53 +157,9 @@ final class BreathingBarModel: ObservableObject {
     }
 
     private static func describeCalibration(_ calibration: FusionCalibration) -> String {
-        if let version = calibration.version {
-            return "Calibration: v\(version) (\(calibration.protocolName))"
-        }
         if calibration.protocolName != "default" {
-            return "Calibration: repo default (\(calibration.protocolName))"
+            return "Calibration: bundled (\(calibration.protocolName))"
         }
         return "Calibration: default fusion"
-    }
-
-    private static func resolveDatabaseURL() -> URL {
-        let defaults = UserDefaults.standard
-        if let explicitPath = ProcessInfo.processInfo.environment["POLAR_DASH_DB"], !explicitPath.isEmpty {
-            return URL(fileURLWithPath: explicitPath).standardizedFileURL
-        }
-
-        if let storedPath = defaults.string(forKey: DefaultsKey.databasePath), !storedPath.isEmpty {
-            return URL(fileURLWithPath: storedPath).standardizedFileURL
-        }
-
-        let fileManager = FileManager.default
-        let roots = [
-            URL(fileURLWithPath: fileManager.currentDirectoryPath),
-            URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent(),
-        ]
-
-        for root in roots {
-            var current = root.standardizedFileURL
-            while true {
-                let candidate = current.appendingPathComponent("data/polar_dash.db")
-                if fileManager.fileExists(atPath: candidate.path) {
-                    defaults.set(candidate.path, forKey: DefaultsKey.databasePath)
-                    return candidate
-                }
-                let parent = current.deletingLastPathComponent()
-                if parent.path == current.path {
-                    break
-                }
-                current = parent
-            }
-        }
-
-        let applicationSupportRoot = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        let appDirectory = applicationSupportRoot.appendingPathComponent("PolarDash", isDirectory: true)
-        let defaultURL = appDirectory.appendingPathComponent("polar_dash.db")
-        defaults.set(defaultURL.path, forKey: DefaultsKey.databasePath)
-        return defaultURL
-            .standardizedFileURL
     }
 }
