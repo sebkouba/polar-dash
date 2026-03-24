@@ -7,14 +7,23 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "BreathingBarCore", targets: ["BreathingBarCore"]),
         .executable(name: "BreathingBar", targets: ["BreathingBar"])
     ],
     targets: [
+        .target(
+            name: "BreathingBarCore"
+        ),
         .executableTarget(
             name: "BreathingBar",
+            dependencies: ["BreathingBarCore"],
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]
+        ),
+        .testTarget(
+            name: "BreathingBarTests",
+            dependencies: ["BreathingBarCore"],
         )
     ]
 )
