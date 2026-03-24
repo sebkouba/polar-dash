@@ -1,4 +1,5 @@
 import AppKit
+import Charts
 import Combine
 import SwiftUI
 
@@ -60,58 +61,24 @@ private struct StatusBarView: View {
 }
 
 private struct MenuContentView: View {
+    private enum Page {
+        case dashboard
+        case settings
+    }
+
     @ObservedObject var model: BreathingBarModel
+    @State private var page: Page = .dashboard
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 18) {
-                    metricView(title: "Breathing Rate", text: currentBreathingRateText, color: flashingColor(for: .blue))
-                    metricView(title: "Heart Rate", text: currentHeartRateText, color: flashingColor(for: .red))
-                    metricView(title: "HRV (RMSSD)", text: currentHeartRateVariabilityText, color: flashingColor(for: .green))
-                }
-                Divider()
-                Text(model.runtimeStatus)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(model.connectionDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(model.calibrationDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Stepper(
-                    value: Binding(get: { model.lowerThreshold }, set: { model.setLowerThreshold($0) }),
-                    in: 4.0...20.0,
-                    step: 0.5
-                ) {
-                    Text("Low flash threshold: \(model.lowerThreshold, specifier: "%.1f") br/min")
-                }
-
-                Stepper(
-                    value: Binding(get: { model.upperThreshold }, set: { model.setUpperThreshold($0) }),
-                    in: 10.0...40.0,
-                    step: 0.5
-                ) {
-                    Text("High flash threshold: \(model.upperThreshold, specifier: "%.1f") br/min")
-                }
-            }
-
-            HStack {
-                Button("Reconnect") {
-                    model.reconnect()
-                }
-                Spacer()
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
+        VStack(alignment: .leading, spacing: 16) {
+            if page == .dashboard {
+                dashboardPage
+            } else {
+                settingsPage
             }
         }
         .padding(14)
-        .frame(width: 390)
+        .frame(width: 720)
     }
 
     @ViewBuilder
@@ -149,6 +116,224 @@ private struct MenuContentView: View {
 
     private func flashingColor(for color: Color) -> Color {
         model.isAlerting && model.flashOn ? .white : color
+    }
+
+    private var dashboardPage: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 18) {
+                        metricView(title: "Breathing Rate", text: currentBreathingRateText, color: flashingColor(for: .blue))
+                        metricView(title: "Heart Rate", text: currentHeartRateText, color: flashingColor(for: .red))
+                        metricView(title: "HRV (RMSSD)", text: currentHeartRateVariabilityText, color: flashingColor(for: .green))
+                    }
+                    Divider()
+                    Text(model.runtimeStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(model.connectionDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(model.calibrationDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    page = .settings
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            historyPanel
+
+            HStack {
+                Button("Reconnect") {
+                    model.reconnect()
+                }
+                Spacer()
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+        }
+    }
+
+    private var historyPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("History")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    model.selectPreviousDay()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.bordered)
+                Text(model.selectedDayTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minWidth: 120)
+                Button {
+                    model.selectNextDay()
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.canSelectNextDay)
+            }
+
+            HStack {
+                Stepper(
+                    value: Binding(
+                        get: { model.historyWindowHours },
+                        set: { model.setHistoryWindowHours($0) }
+                    ),
+                    in: 1...24,
+                    step: 1
+                ) {
+                    Text("Window: \(model.historyWindowLabel)")
+                }
+                .disabled(model.historyShowsAllDay)
+
+                Button(model.historyShowsAllDay ? "Use Hours" : "All Day") {
+                    model.setHistoryShowsAllDay(!model.historyShowsAllDay)
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Text(model.historyStorageDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if model.historySamples.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No graph data for this period.")
+                        .font(.subheadline.weight(.semibold))
+                    Text(model.historyRetentionDays == 0 ? "Set retention above 0 days in Settings to save derived graph history." : "Keep the app running on the selected day to populate history.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 220, alignment: .leading)
+                .padding(14)
+                .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+                Chart {
+                    ForEach(model.historySamples, id: \.sampledAt) { sample in
+                        if let breathingRate = sample.breathingRate {
+                            LineMark(
+                                x: .value("Time", sample.sampledAt),
+                                y: .value("Value", breathingRate)
+                            )
+                            .foregroundStyle(by: .value("Metric", "Breathing Rate"))
+                            .interpolationMethod(.catmullRom)
+                        }
+                        if let heartRate = sample.heartRate {
+                            LineMark(
+                                x: .value("Time", sample.sampledAt),
+                                y: .value("Value", heartRate)
+                            )
+                            .foregroundStyle(by: .value("Metric", "Heart Rate"))
+                            .interpolationMethod(.catmullRom)
+                        }
+                        if let hrvRMSSD = sample.hrvRMSSD {
+                            LineMark(
+                                x: .value("Time", sample.sampledAt),
+                                y: .value("Value", hrvRMSSD)
+                            )
+                            .foregroundStyle(by: .value("Metric", "HRV (RMSSD)"))
+                            .interpolationMethod(.catmullRom)
+                        }
+                    }
+                }
+                .chartForegroundStyleScale([
+                    "Breathing Rate": Color.blue,
+                    "Heart Rate": Color.red,
+                    "HRV (RMSSD)": Color.green,
+                ])
+                .chartLegend(position: .bottom, alignment: .leading)
+                .chartXScale(domain: model.historyGraphRange)
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .frame(height: 260)
+                .padding(10)
+                .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+    }
+
+    private var settingsPage: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Button {
+                    page = .dashboard
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                Spacer()
+                Text("Settings")
+                    .font(.headline)
+                Spacer()
+                Color.clear.frame(width: 44, height: 1)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Stepper(
+                    value: Binding(get: { model.lowerThreshold }, set: { model.setLowerThreshold($0) }),
+                    in: 4.0...20.0,
+                    step: 0.5
+                ) {
+                    Text("Low flash threshold: \(model.lowerThreshold, specifier: "%.1f") br/min")
+                }
+
+                Stepper(
+                    value: Binding(get: { model.upperThreshold }, set: { model.setUpperThreshold($0) }),
+                    in: 10.0...40.0,
+                    step: 0.5
+                ) {
+                    Text("High flash threshold: \(model.upperThreshold, specifier: "%.1f") br/min")
+                }
+            }
+            .padding(14)
+            .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Stepper(
+                    value: Binding(
+                        get: { model.historyRetentionDays },
+                        set: { model.setHistoryRetentionDays($0) }
+                    ),
+                    in: 0...1000,
+                    step: 1
+                ) {
+                    Text("History retention: \(model.historyRetentionLabel)")
+                }
+
+                Text("Set to 0 to disable graph history storage. Only derived breathing, heart-rate, and HRV points are saved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(14)
+            .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Button("Reconnect") {
+                    model.reconnect()
+                }
+                Spacer()
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+        }
     }
 }
 
@@ -201,7 +386,7 @@ private final class StatusItemController: NSObject, NSPopoverDelegate {
     private func configurePopover() {
         popover.behavior = .transient
         popover.delegate = self
-        popover.contentSize = NSSize(width: 390, height: 240)
+        popover.contentSize = NSSize(width: 720, height: 560)
         popover.contentViewController = NSHostingController(rootView: MenuContentView(model: model))
     }
 
