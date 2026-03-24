@@ -1,13 +1,13 @@
 import Foundation
 
-enum PolarProtocolError: Error {
+public enum PolarProtocolError: Error {
     case invalidControlResponse
     case invalidHeartRateFrame
     case invalidPMDFrame
     case unsupportedFrame
 }
 
-enum PolarPMDMeasurement: UInt8, CaseIterable {
+public enum PolarPMDMeasurement: UInt8, CaseIterable {
     case ecg = 0x00
     case ppg = 0x01
     case acc = 0x02
@@ -32,18 +32,18 @@ enum PolarPMDControlOpcode: UInt8 {
     case controlResponse = 0xF0
 }
 
-struct PolarHeartRateFrame: Equatable {
-    let recordedAtNs: Int64
-    let averageHeartRateBpm: Double
-    let rrIntervalsMs: [Int]
-    let energyKJ: Int?
+public struct PolarHeartRateFrame: Equatable {
+    public let recordedAtNs: Int64
+    public let averageHeartRateBpm: Double
+    public let rrIntervalsMs: [Int]
+    public let energyKJ: Int?
 }
 
-enum PolarPMDFrame: Equatable {
+public enum PolarPMDFrame: Equatable {
     case ecg(sensorRecordedAtNs: Int64, sampleRateHz: Int, samples: [Int])
     case acc(sensorRecordedAtNs: Int64, sampleRateHz: Int, samples: [(Int, Int, Int)])
 
-    static func == (lhs: PolarPMDFrame, rhs: PolarPMDFrame) -> Bool {
+    public static func == (lhs: PolarPMDFrame, rhs: PolarPMDFrame) -> Bool {
         switch (lhs, rhs) {
         case let (.ecg(lhsTime, lhsRate, lhsSamples), .ecg(rhsTime, rhsRate, rhsSamples)):
             return lhsTime == rhsTime && lhsRate == rhsRate && lhsSamples == rhsSamples
@@ -79,7 +79,7 @@ struct PolarPMDTimebase {
     }
 }
 
-func parsePolarHeartRateMeasurement(_ data: Data, recordedAtNs: Int64) throws -> PolarHeartRateFrame {
+public func parsePolarHeartRateMeasurement(_ data: Data, recordedAtNs: Int64) throws -> PolarHeartRateFrame {
     guard data.count >= 2 else {
         throw PolarProtocolError.invalidHeartRateFrame
     }

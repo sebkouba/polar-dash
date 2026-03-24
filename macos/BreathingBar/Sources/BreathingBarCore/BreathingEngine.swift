@@ -1,21 +1,29 @@
 import Foundation
 
-let ECGSampleRateHz = 130
-let ACCSampleRateHz = 200
+public let ECGSampleRateHz = 130
+public let ACCSampleRateHz = 200
 let respiratoryBandHz = (low: 0.08, high: 0.70)
-let defaultBreathingWindowSeconds = 20
-let defaultBreathingStepSeconds = 2
-let defaultFusionSmoothingAlpha = 0.75
-let defaultSingleSourceSmoothingAlpha = 0.60
+public let defaultBreathingWindowSeconds = 20
+public let defaultBreathingStepSeconds = 2
+public let defaultFusionSmoothingAlpha = 0.75
+public let defaultSingleSourceSmoothingAlpha = 0.60
 let defaultCalibrationEpsilon = 0.25
 let defaultMinimumCalibrationPoints = 3
 
-struct CandidateEstimate: Equatable {
-    let estimatedAtNs: Int64
-    let rateBpm: Double
-    let quality: Double
-    let source: String
-    let calibrationVersion: Int?
+public struct CandidateEstimate: Equatable {
+    public let estimatedAtNs: Int64
+    public let rateBpm: Double
+    public let quality: Double
+    public let source: String
+    public let calibrationVersion: Int?
+
+    public init(estimatedAtNs: Int64, rateBpm: Double, quality: Double, source: String, calibrationVersion: Int?) {
+        self.estimatedAtNs = estimatedAtNs
+        self.rateBpm = rateBpm
+        self.quality = quality
+        self.source = source
+        self.calibrationVersion = calibrationVersion
+    }
 }
 
 struct ReferenceInterval: Equatable {
@@ -25,16 +33,16 @@ struct ReferenceInterval: Equatable {
     let rateBpm: Double
 }
 
-struct FusionCalibration: Codable, Equatable {
-    var version: Int?
-    var protocolName: String
-    var annotationSessionID: Int?
-    var biasByCandidate: [String: Double]
-    var reliabilityByCandidate: [String: Double]
-    var minimumPointsPerCandidate: Int
-    var epsilon: Double
-    var trainedPointCount: Int
-    var trainedAtNs: Int64?
+public struct FusionCalibration: Codable, Equatable {
+    public var version: Int?
+    public var protocolName: String
+    public var annotationSessionID: Int?
+    public var biasByCandidate: [String: Double]
+    public var reliabilityByCandidate: [String: Double]
+    public var minimumPointsPerCandidate: Int
+    public var epsilon: Double
+    public var trainedPointCount: Int
+    public var trainedAtNs: Int64?
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -48,7 +56,7 @@ struct FusionCalibration: Codable, Equatable {
         case trainedAtNs = "trained_at_ns"
     }
 
-    static func `default`() -> FusionCalibration {
+    public static func `default`() -> FusionCalibration {
         FusionCalibration(
             version: nil,
             protocolName: "default",
@@ -63,12 +71,17 @@ struct FusionCalibration: Codable, Equatable {
     }
 }
 
-struct PhaseLabel {
-    let recordedAtNs: Int64
-    let phaseCode: String
+public struct PhaseLabel {
+    public let recordedAtNs: Int64
+    public let phaseCode: String
+
+    public init(recordedAtNs: Int64, phaseCode: String) {
+        self.recordedAtNs = recordedAtNs
+        self.phaseCode = phaseCode
+    }
 }
 
-final class LiveBreathingEngine {
+public final class LiveBreathingEngine {
     private struct AccSample {
         let timestampNs: Int64
         let x: Double
@@ -86,7 +99,7 @@ final class LiveBreathingEngine {
         let rrMs: Double
     }
 
-    let windowSeconds: Int
+    public let windowSeconds: Int
     let stepSeconds: Int
     let fusionSmoothingAlpha: Double
     let singleSourceSmoothingAlpha: Double
@@ -99,9 +112,9 @@ final class LiveBreathingEngine {
     private var previousRateBySource: [String: Double] = [:]
     private var lastEstimateAtNs: Int64?
 
-    var calibration = FusionCalibration.default()
+    public var calibration = FusionCalibration.default()
 
-    init(
+    public init(
         windowSeconds: Int = defaultBreathingWindowSeconds,
         stepSeconds: Int = defaultBreathingStepSeconds,
         fusionSmoothingAlpha: Double = defaultFusionSmoothingAlpha,
@@ -115,11 +128,11 @@ final class LiveBreathingEngine {
         stepNs = Int64(stepSeconds) * 1_000_000_000
     }
 
-    func setCalibration(_ calibration: FusionCalibration) {
+    public func setCalibration(_ calibration: FusionCalibration) {
         self.calibration = calibration
     }
 
-    func addAccFrame(
+    public func addAccFrame(
         sensorRecordedAtNs: Int64,
         sampleRateHz: Int,
         samples: [(Int, Int, Int)]
@@ -140,7 +153,7 @@ final class LiveBreathingEngine {
         return maybeEstimate(at: sensorRecordedAtNs)
     }
 
-    func addEcgFrame(
+    public func addEcgFrame(
         sensorRecordedAtNs: Int64,
         sampleRateHz: Int,
         samples: [Int]
@@ -158,7 +171,7 @@ final class LiveBreathingEngine {
         return maybeEstimate(at: sensorRecordedAtNs)
     }
 
-    func addHrFrame(
+    public func addHrFrame(
         recordedAtNs: Int64,
         averageHeartRateBpm: Double,
         rrIntervalsMs: [Int]
@@ -190,7 +203,7 @@ final class LiveBreathingEngine {
             .map { ($0.timestampNs, $0.x, $0.y, $0.z) }
     }
 
-    func recentBeats(lookbackSeconds: Int = 30) -> [(Int64, Double)] {
+    public func recentBeats(lookbackSeconds: Int = 30) -> [(Int64, Double)] {
         let cutoffNs = latestTimeNsValue() - Int64(lookbackSeconds) * 1_000_000_000
         return beats
             .filter { $0.timestampNs >= cutoffNs }
@@ -635,7 +648,7 @@ func fitFusionCalibration(
     )
 }
 
-func computeRMSSDSeries(
+public func computeRMSSDSeries(
     beats: [(Int64, Double)],
     windowSeconds: Int = 60
 ) -> [(Int64, Double)] {

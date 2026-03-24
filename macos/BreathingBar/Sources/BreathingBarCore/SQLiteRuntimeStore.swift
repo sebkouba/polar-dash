@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 
-enum SQLiteRuntimeStoreError: Error {
+public enum SQLiteRuntimeStoreError: Error {
     case openDatabase(String)
     case execute(String)
     case prepare(String)
@@ -10,17 +10,17 @@ enum SQLiteRuntimeStoreError: Error {
     case decodeCalibration(String)
 }
 
-struct CalibrationRecord {
-    let id: Int
-    let protocolName: String
-    let calibration: FusionCalibration
+public struct CalibrationRecord {
+    public let id: Int
+    public let protocolName: String
+    public let calibration: FusionCalibration
 }
 
-final class SQLiteRuntimeStore {
+public final class SQLiteRuntimeStore {
     private(set) var databaseURL: URL
     private var handle: OpaquePointer?
 
-    init(databaseURL: URL) throws {
+    public init(databaseURL: URL) throws {
         self.databaseURL = databaseURL.standardizedFileURL
         try FileManager.default.createDirectory(
             at: self.databaseURL.deletingLastPathComponent(),
@@ -35,7 +35,7 @@ final class SQLiteRuntimeStore {
         close()
     }
 
-    func close() {
+    public func close() {
         if let handle {
             sqlite3_close(handle)
             self.handle = nil
@@ -43,7 +43,7 @@ final class SQLiteRuntimeStore {
     }
 
     @discardableResult
-    func startSession(deviceName: String, deviceAddress: String) throws -> Int {
+    public func startSession(deviceName: String, deviceAddress: String) throws -> Int {
         let startedAtNs = currentEpochNanoseconds()
         let statement = try prepare(
             """
@@ -59,7 +59,7 @@ final class SQLiteRuntimeStore {
         return Int(sqlite3_last_insert_rowid(handle))
     }
 
-    func closeSession(id: Int) throws {
+    public func closeSession(id: Int) throws {
         let statement = try prepare("UPDATE sessions SET ended_at_ns = ? WHERE id = ?")
         defer { sqlite3_finalize(statement) }
         try bindInt64(currentEpochNanoseconds(), at: 1, in: statement)
@@ -67,7 +67,7 @@ final class SQLiteRuntimeStore {
         try step(statement)
     }
 
-    func updateSessionBattery(sessionID: Int, batteryPercent: Int) throws {
+    public func updateSessionBattery(sessionID: Int, batteryPercent: Int) throws {
         let statement = try prepare("UPDATE sessions SET battery_percent = ? WHERE id = ?")
         defer { sqlite3_finalize(statement) }
         try bindInt64(Int64(batteryPercent), at: 1, in: statement)
@@ -75,7 +75,7 @@ final class SQLiteRuntimeStore {
         try step(statement)
     }
 
-    func insertHeartRateFrame(
+    public func insertHeartRateFrame(
         sessionID: Int,
         recordedAtNs: Int64,
         averageHeartRateBpm: Double,
@@ -106,7 +106,7 @@ final class SQLiteRuntimeStore {
         try step(statement)
     }
 
-    func insertECGFrame(
+    public func insertECGFrame(
         sessionID: Int,
         sensorRecordedAtNs: Int64,
         sampleRateHz: Int,
@@ -132,7 +132,7 @@ final class SQLiteRuntimeStore {
         try step(statement)
     }
 
-    func insertACCFrame(
+    public func insertACCFrame(
         sessionID: Int,
         sensorRecordedAtNs: Int64,
         sampleRateHz: Int,
@@ -159,7 +159,7 @@ final class SQLiteRuntimeStore {
         try step(statement)
     }
 
-    func insertEvent(
+    public func insertEvent(
         eventType: String,
         details: [String: Any],
         level: String = "INFO",
@@ -190,7 +190,7 @@ final class SQLiteRuntimeStore {
         try step(statement)
     }
 
-    func insertBreathingEstimate(
+    public func insertBreathingEstimate(
         sessionID: Int,
         estimate: CandidateEstimate,
         windowSeconds: Int
@@ -215,7 +215,7 @@ final class SQLiteRuntimeStore {
         try step(statement)
     }
 
-    func insertBreathingCandidateEstimate(
+    public func insertBreathingCandidateEstimate(
         sessionID: Int,
         estimate: CandidateEstimate
     ) throws {
@@ -245,7 +245,7 @@ final class SQLiteRuntimeStore {
         try step(statement)
     }
 
-    func latestCalibrationRecord() throws -> CalibrationRecord? {
+    public func latestCalibrationRecord() throws -> CalibrationRecord? {
         let statement = try prepare(
             """
             SELECT id, protocol_name, model_json
