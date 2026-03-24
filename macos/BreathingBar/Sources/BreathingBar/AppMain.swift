@@ -257,6 +257,7 @@ private struct MenuContentView: View {
                 ])
                 .chartLegend(position: .bottom, alignment: .leading)
                 .chartXScale(domain: model.historyGraphRange)
+                .chartYScale(domain: 0.0...200.0)
                 .chartYAxis {
                     AxisMarks(position: .leading)
                 }
