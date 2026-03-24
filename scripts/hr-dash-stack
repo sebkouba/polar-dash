@@ -22,133 +22,38 @@ resolve_project_root() {
 }
 
 PROJECT_ROOT="${HR_DASH_ROOT:-$(resolve_project_root "${BASH_SOURCE[0]}")}"
-DATA_DIR="$PROJECT_ROOT/.hr_stack"
-LOG_DIR="$DATA_DIR/logs"
-PID_DIR="$DATA_DIR/pids"
-BREATHINGBAR_PID_FILE="$PID_DIR/breathingbar.pid"
-BREATHINGBAR_LOG_FILE="$LOG_DIR/breathingbar.log"
-
-DB_PATH="${POLAR_DASH_DB_PATH:-data/polar_dash.db}"
-STARTUP_WAIT_SECONDS=1
 PACKAGE_PATH="$PROJECT_ROOT/macos/BreathingBar"
-SWIFT_BIN="$(command -v swift 2>/dev/null || true)"
-
-if [ -z "$SWIFT_BIN" ]; then
-  echo "swift is not installed or not on PATH."
-  exit 1
-fi
-
-resolve_db_path() {
-  local db_path="$1"
-  local home_expanded="${db_path/#\~/$HOME}"
-
-  if [[ "$home_expanded" == /* ]]; then
-    printf "%s\n" "$home_expanded"
-    return 0
-  fi
-
-  printf "%s/%s\n" "$PROJECT_ROOT" "$home_expanded"
-}
-
-mkdir -p "$LOG_DIR" "$PID_DIR"
-DB_PATH_ABS="$(resolve_db_path "$DB_PATH")"
-
-is_process_running() {
-  local pid="$1"
-  kill -0 "$pid" >/dev/null 2>&1
-}
-
-terminate_pid() {
-  local pid="$1"
-  local label="$2"
-  local timeout_left=15
-
-  if ! is_process_running "$pid"; then
-    return 0
-  fi
-
-  kill "$pid" >/dev/null 2>&1 || {
-    echo "Failed to signal termination for ${label} pid ${pid}."
-    return 1
-  }
-
-  while [ "$timeout_left" -gt 0 ]; do
-    if ! is_process_running "$pid"; then
-      return 0
-    fi
-    sleep 0.2
-    timeout_left=$((timeout_left - 1))
-  done
-
-  kill -KILL "$pid" >/dev/null 2>&1 || true
-  sleep 0.2
-
-  if is_process_running "$pid"; then
-    echo "${label} pid ${pid} did not stop."
-    return 1
-  fi
-
-  return 0
-}
-
-cleanup_stale_pid_file() {
-  local pid_file="$1"
-  local pid
-
-  if [ ! -f "$pid_file" ]; then
-    return 0
-  fi
-
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [ -n "${pid:-}" ] && ! is_process_running "$pid"; then
-    rm -f "$pid_file"
-  fi
-}
+APPLICATIONS_DIR="${BREATHINGBAR_APPLICATIONS_DIR:-/Applications}"
+APP_PATH="$APPLICATIONS_DIR/BreathingBar.app"
+DEPLOY_SCRIPT="$PROJECT_ROOT/scripts/deploy-breathingbar-app.sh"
 
 start_services() {
-  cleanup_stale_pid_file "$BREATHINGBAR_PID_FILE"
-
-  if [ -f "$BREATHINGBAR_PID_FILE" ]; then
-    echo "BreathingBar is already running. Use hroff first."
-    return 1
+  if [[ ! -x "$DEPLOY_SCRIPT" ]]; then
+    echo "Missing deploy script: $DEPLOY_SCRIPT"
+    exit 1
   fi
 
-  cd "$PROJECT_ROOT"
-  POLAR_DASH_DB="$DB_PATH_ABS" nohup "$SWIFT_BIN" run --package-path "$PACKAGE_PATH" >>"$BREATHINGBAR_LOG_FILE" 2>&1 &
-  local breathingbar_pid="$!"
-  echo "$breathingbar_pid" >"$BREATHINGBAR_PID_FILE"
-
-  sleep "$STARTUP_WAIT_SECONDS"
-  if ! is_process_running "$breathingbar_pid"; then
-    echo "BreathingBar failed to start. Last output:"
-    tail -n 80 "$BREATHINGBAR_LOG_FILE"
-    return 1
-  fi
-
-  echo "Started BreathingBar runtime."
-  echo "  - BreathingBar: $breathingbar_pid"
-  echo "  - Log: $BREATHINGBAR_LOG_FILE"
+  "$DEPLOY_SCRIPT"
 }
 
 stop_services() {
-  cleanup_stale_pid_file "$BREATHINGBAR_PID_FILE"
-
-  if [ ! -f "$BREATHINGBAR_PID_FILE" ]; then
-    echo "BreathingBar is not running."
-    return 0
-  fi
-
-  local pid
-  pid="$(cat "$BREATHINGBAR_PID_FILE")"
-  if is_process_running "$pid"; then
-    terminate_pid "$pid" "BreathingBar"
-  fi
-  rm -f "$BREATHINGBAR_PID_FILE"
-
+  osascript -e 'tell application id "com.sebastian.polar-dash.breathingbar" to quit' >/dev/null 2>&1 || true
+  pkill -f "$APP_PATH/Contents/MacOS/BreathingBar" >/dev/null 2>&1 || true
   pkill -f "swift run --package-path .*macos/BreathingBar" >/dev/null 2>&1 || true
-  pkill -f "macos/BreathingBar/.build/.*/BreathingBar" >/dev/null 2>&1 || true
+  pkill -f "$PACKAGE_PATH/.build/.*/BreathingBar" >/dev/null 2>&1 || true
 
-  echo "Stopped BreathingBar runtime."
+  local attempts=25
+  while pgrep -f "$APP_PATH/Contents/MacOS/BreathingBar" >/dev/null 2>&1 && [ "$attempts" -gt 0 ]; do
+    sleep 0.2
+    attempts=$((attempts - 1))
+  done
+
+  if pgrep -f "$APP_PATH/Contents/MacOS/BreathingBar" >/dev/null 2>&1; then
+    echo "BreathingBar did not stop cleanly."
+    return 1
+  fi
+
+  echo "Stopped BreathingBar."
 }
 
 case "$(basename "$0")" in

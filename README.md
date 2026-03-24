@@ -56,10 +56,10 @@ Requirements:
 Launch the Swift runtime app:
 
 ```bash
-swift run --package-path macos/BreathingBar
+./scripts/deploy-breathingbar-app.sh
 ```
 
-The app scans for the Polar H10, connects directly over Bluetooth, loads the bundled calibration, stores only derived breathing/heart-rate/HRV points for the in-app history graph, and updates the menu bar without persisting raw sensor frames.
+The deploy helper rebuilds BreathingBar, replaces `/Applications/BreathingBar.app`, signs it, and launches the installed copy. The app scans for the Polar H10, connects directly over Bluetooth, loads the bundled calibration, stores only derived breathing/heart-rate/HRV points for the in-app history graph, and updates the menu bar without persisting raw sensor frames.
 
 If you want the optional Python tooling for calibration, evaluation, or older inspection views:
 
@@ -81,8 +81,10 @@ Then open `http://127.0.0.1:8501`.
 
 ```bash
 swift build --package-path macos/BreathingBar
-swift run --package-path macos/BreathingBar
+./scripts/deploy-breathingbar-app.sh
 ./scripts/install-hr-stack.sh
+hron
+hroff
 uv run polar-dash scan --prefix "Polar H10"
 uv run polar-dash cockpit --db data/polar_dash.db
 uv run polar-dash annotate-breathing --db data/polar_dash.db
@@ -90,7 +92,7 @@ uv run polar-dash evaluate-breathing --db data/polar_dash.db
 uv run polar-dash dashboard --db data/polar_dash.db --port 8501
 ```
 
-The `install-hr-stack.sh` helper installs `hron` and `hroff`, which wrap the Swift runtime app for quick local start/stop cycles.
+The `install-hr-stack.sh` helper installs `hron` and `hroff`. `hron` rebuilds, installs, signs, and launches `/Applications/BreathingBar.app`; `hroff` stops the installed app and also cleans up any legacy `swift run` process.
 
 ## Keyboard Shortcuts
 
