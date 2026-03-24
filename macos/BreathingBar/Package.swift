@@ -15,6 +15,9 @@ let package = Package(
             name: "BreathingBarCore",
             resources: [
                 .process("Resources")
+            ],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
             ]
         ),
         .executableTarget(
