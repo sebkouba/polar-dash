@@ -1,7 +1,6 @@
 # Code Rating
-- vibe slop
-- brittle
-- working
+- all vibed
+- daily driving swift app successfully
 
 # Polar Dash
 
@@ -17,13 +16,9 @@ visible on my MacBook without needing a full training or lab setup.
 
 It is a practical hack, not a medical device. The breathing signal is inferred from ECG, RR intervals, and chest motion, so it is useful for feedback and experimentation, not diagnosis.
 
-![BreathingBar app](docs/images/cockpit-demo.png)
+![BreathingBar dashboard](docs/images/breathingbar-dashboard.png)
 
-BreathingBar is now the main product: one Swift app that handles Bluetooth collection, live estimation, history, and the on-device dashboard.
-
-![Menu bar readout](docs/images/menu-bar-demo.png)
-
-The menu bar extra keeps the latest breathing rate, heart rate, and HRV visible at a glance while the full app window handles the rest.
+BreathingBar is now the main product: one Swift app that handles Bluetooth collection, live estimation, per-metric history charts, retention controls, and the on-device dashboard. The menu bar extra still keeps the latest breathing rate, heart rate, and HRV visible at a glance while the full app window handles connection details, history navigation, and settings.
 
 ## Why This Exists
 
@@ -32,7 +27,7 @@ Most consumer heart-rate tools are good at heart rate and rough HRV, but not at 
 This repo is the result of a short build focused on that exact gap:
 
 - collect live Polar H10 BLE data,
-- keep a breathing/HR/HRV monitor with historical trend graphs in one native app,
+- keep a breathing/HR/HRV monitor with day-based historical trend graphs in one native app,
 - estimate breathing from multiple imperfect signals,
 - surface the result both in the app window and the menu bar.
 
@@ -57,7 +52,7 @@ Launch the app:
 ./scripts/deploy-breathingbar-app.sh
 ```
 
-The deploy helper rebuilds BreathingBar, replaces `/Applications/BreathingBar.app`, signs it, and launches the installed copy. The app scans for the Polar H10, connects directly over Bluetooth, loads the bundled calibration, stores only derived breathing/heart-rate/HRV points for the in-app history graph, and updates both the dashboard window and menu bar without persisting raw sensor frames.
+The deploy helper rebuilds BreathingBar, replaces `/Applications/BreathingBar.app`, signs it, and launches the installed copy. The app scans for the Polar H10, connects directly over Bluetooth, loads the bundled calibration, stores only derived breathing/heart-rate/HRV points for the in-app history graph, and updates both the dashboard window and menu bar without persisting raw sensor frames. The dashboard lets you switch between an hourly window and all-day history, step across saved days, and toggle breathing, heart-rate, and HRV graph visibility independently.
 
 If you want the optional Python tooling for calibration, evaluation, or older inspection views:
 
@@ -118,7 +113,7 @@ This repository is intentionally prepared for public upload:
 - local databases are ignored,
 - runtime logs and scratch captures are ignored,
 - no device IDs or machine-specific absolute paths are referenced in tracked files,
-- the committed screenshots are sanitized demo assets rather than committed live databases.
+- the committed screenshot is a sanitized demo asset rather than a committed live database.
 
 Ignored local-only paths include `data/`, `tmp/`, and `.hr_stack/`.
 
