@@ -14,6 +14,8 @@ I built it to get a reasonable live approximation of:
 
 visible on my MacBook without needing a full training or lab setup.
 
+It has a setting for the indicator bar to start flashing when breath / min boundaries are crossed. My breathing is often shallow and i need a rest above 17 br / m.
+
 It is a practical hack, not a medical device. The breathing signal is inferred from ECG, RR intervals, and chest motion, so it is useful for feedback and experimentation, not diagnosis.
 
 ![BreathingBar dashboard](docs/images/breathingbar-dashboard.png)
