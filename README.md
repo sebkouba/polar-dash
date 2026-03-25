@@ -18,7 +18,11 @@ It is a practical hack, not a medical device. The breathing signal is inferred f
 
 ![BreathingBar dashboard](docs/images/breathingbar-dashboard.png)
 
-BreathingBar is now the main product: one Swift app that handles Bluetooth collection, live estimation, per-metric history charts, retention controls, and the on-device dashboard. The menu bar extra still keeps the latest breathing rate, heart rate, and HRV visible at a glance while the full app window handles connection details, history navigation, and settings.
+BreathingBar is now the main product: one Swift app that handles Bluetooth collection, live estimation, per-metric history charts, retention controls, and the on-device dashboard.
+
+![BreathingBar menu bar stats](docs/images/menu-bar-demo.png)
+
+The menu bar extra keeps the latest breathing rate, heart rate, and HRV visible at a glance while the full app window handles connection details, history navigation, and settings.
 
 ## Why This Exists
 
